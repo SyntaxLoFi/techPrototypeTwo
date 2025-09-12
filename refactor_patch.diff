@@ -1,107 +1,33 @@
-diff --git a/predictionMarketVarianceREFACTOR/hedging/options.py b/predictionMarketVarianceREFACTOR/hedging/options.py
-index abc1234..def5678 100644
---- a/predictionMarketVarianceREFACTOR/hedging/options.py
-+++ b/predictionMarketVarianceREFACTOR/hedging/options.py
-@@ -1,3 +1,4 @@
- from __future__ import annotations
+diff --git a/expected_value_filter.py b/expected_value_filter.py
+index 0000000..0000001 100644
+--- a/expected_value_filter.py
++++ b/expected_value_filter.py
 @@
- from utils.log_gate import reason_debug  # type: ignore
--from utils.step_debugger import get_step_debugger  # type: ignore
--from utils.method_checkpoint_decorator import checkpoint_all_methods  # type: ignore
-+from utils.step_debugger import get_step_debugger  # type: ignore
-+from utils.debug_recorder import get_recorder  # type: ignore
-@@
- @dataclass
- class _Quote:
-     bid: Optional[float]
-     ask: Optional[float]
-     mid: Optional[float]
- 
--@checkpoint_all_methods
- class OptionHedgeBuilder:
-     """
-     Bridge from refreshed market data (scanners) → evaluated opportunities.
-@@
-     def __init__(self,
-                  scanners: Dict[str, Dict[str, Any]],
-                  market_analyzer: Optional[Any] = None,
-                  logger: Optional[logging.Logger] = None) -> None:
-         self.scanners = scanners or {}
-         self.market_analyzer = market_analyzer or MarketDataAnalyzer()
-         self.logger = logger or logging.getLogger(self.__class__.__name__)
-+        # Write one consumer-side checkpoint only (single JSON per run)
-+        self._consumer_checkpoint_written = False
- 
-     # ----- public API -----
-     def build(self, _market_snapshot: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:
-         opportunities: List[Dict[str, Any]] = []
-         debugger = get_step_debugger()
-@@
-                 # Build instrument universe once per contract
-                 hedge_instruments: Dict[str, Any] = {}
-                 oc = scanner.get('options_collector')
-                 if scanner.get('has_options') and oc:
-                     try:
-                         all_options = oc.get_all_options() or []
-                         hedge_instruments["options"] = all_options
-+                        # -- Consumer-side checkpoint (single JSON) --
-+                        # Right after options are made available to the hedge builder,
-+                        # record a compact summary proving whether options are present
-+                        # and what the hedge logic will "see". Write once per run.
-+                        try:
-+                            if not self._consumer_checkpoint_written:
-+                                rec = get_recorder(get_config())
-+                                if getattr(rec, "enabled", False):
-+                                    expiries = []
-+                                    strike_min = None
-+                                    strike_max = None
-+                                    # Cap iteration to keep this lightweight
-+                                    for o in (all_options or [])[:2000]:
-+                                        ex = (o.get("expiry_date")
-+                                              or o.get("expiry")
-+                                              or o.get("expiration"))
-+                                        if ex:
-+                                            expiries.append(str(ex))
-+                                        try:
-+                                            k = (o.get("strike")
-+                                                 or o.get("strike_price")
-+                                                 or o.get("k"))
-+                                            if k is not None:
-+                                                kf = float(k)
-+                                                strike_min = kf if strike_min is None else min(strike_min, kf)
-+                                                strike_max = kf if strike_max is None else max(strike_max, kf)
-+                                        except Exception:
-+                                            pass
-+                                    contract_hint = (contract.get("question_id")
-+                                                     or contract.get("slug")
-+                                                     or contract.get("id")
-+                                                     or contract.get("marketSlug")
-+                                                     or contract.get("title"))
-+                                    summary = {
-+                                        "currency": currency,
-+                                        "contract_hint": str(contract_hint),
-+                                        "has_options_flag": bool(scanner.get("has_options")),
-+                                        "collector_present": bool(oc),
-+                                        "num_options": len(all_options or []),
-+                                        "unique_expiries_count": len(set(expiries)),
-+                                        "sample_expiries": sorted(set(expiries))[:5],
-+                                        "strike_min": strike_min,
-+                                        "strike_max": strike_max,
-+                                    }
-+                                    rec.dump_json(
-+                                        "OptionsHedgeBuilder_checkpoints/consumer_summary.json",
-+                                        summary,
-+                                        category="checkpoint",
-+                                        overwrite=True,
-+                                    )
-+                                    self._consumer_checkpoint_written = True
-+                        except Exception:
-+                            # Never allow debugging to impact flow
-+                            pass
-                     except Exception:
-                         pass
-                 if scanner.get('has_perps') and scanner.get('perps_collector'):
-                     try:
-                         hedge_instruments["perps"] = scanner['perps_collector'].get_perp_data(currency) or {}
-                     except Exception:
-                         pass
+-import numpy as np
++import numpy as np
++import os
+@@ class ExpectedValueFilter:
+-    def __init__(self, min_ev: float = 0.10, min_sharpe: float = 0.5, min_kelly: float = 0.01,
++    def __init__(self, min_ev: float = 0.10, min_sharpe: float = 0.5, min_kelly: float = 0.01,
+                  max_downside: float = 100.0, max_downside_pct: float = 0.10,  # 10% of position size
+                  downside_scaling_mode: str = 'adaptive',  # 'fixed', 'percentage', or 'adaptive'
+                  probability_blend_weight: float = 0.5,
+                  probability_clip_floor: float = PROBABILITY_CLIP_FLOOR,
+                  probability_clip_ceiling: float = PROBABILITY_CLIP_CEILING,
+                  capital_at_risk: Optional[float] = None,
+                  kelly_fraction: float = KELLY_FRACTION):
+         """ Initialize filter with configurable thresholds.
+         """
+-        self.min_ev = float(min_ev)
+-        self.min_sharpe = float(min_sharpe)
+-        self.min_kelly = float(min_kelly)
++        # Allow environment overrides without changing call sites
++        try:
++            if os.getenv("MIN_EV"):        min_ev = float(os.getenv("MIN_EV"))       # type: ignore
++            if os.getenv("MIN_SHARPE"):    min_sharpe = float(os.getenv("MIN_SHARPE"))  # type: ignore
++            if os.getenv("MIN_KELLY"):     min_kelly = float(os.getenv("MIN_KELLY"))  # type: ignore
++        except Exception:
++            pass
++        self.min_ev = float(min_ev)
++        self.min_sharpe = float(min_sharpe)
++        self.min_kelly = float(min_kelly)

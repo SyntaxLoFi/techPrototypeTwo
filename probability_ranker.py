@@ -31,6 +31,7 @@ Key innovations:
 """
 
 import json
+import os
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timezone
@@ -226,12 +227,13 @@ class ProbabilityRanker:
             before = len(opportunities)
             safe = []
             dropped = 0
+            strict = (os.getenv("STRICT_EXEC_GATING") == "1")
             for opp in opportunities:
                 try:
                     bad = violates_no_immediate_loss(opp.get('execution_details', {}))
                 except Exception:
-                    # Missing quotes => not executable at entry → drop
-                    bad = True
+                    # Keep opps for diagnostics unless STRICT gate is explicitly enabled
+                    bad = True if strict else False
                 if bad:
                     dropped += 1
                 else:

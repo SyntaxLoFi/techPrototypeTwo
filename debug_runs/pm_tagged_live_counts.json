@@ -1,16 +1,16 @@
 {
   "assets_count": {
-    "BTC": 305,
+    "BTC": 326,
     "DOGE": 26,
-    "ETH": 276,
-    "SOL": 265,
-    "XRP": 248
+    "ETH": 295,
+    "SOL": 285,
+    "XRP": 268
   },
   "by_asset": {
     "BTC": {
       "DIRECTIONAL_PERIOD": 50,
-      "RANGE_BUCKET": 69,
-      "SINGLE_THRESHOLD": 151,
+      "RANGE_BUCKET": 78,
+      "SINGLE_THRESHOLD": 163,
       "UNKNOWN": 35
     },
     "DOGE": {
@@ -18,29 +18,29 @@
       "UNKNOWN": 18
     },
     "ETH": {
-      "DIRECTIONAL_PERIOD": 51,
-      "RANGE_BUCKET": 65,
-      "SINGLE_THRESHOLD": 155,
+      "DIRECTIONAL_PERIOD": 49,
+      "RANGE_BUCKET": 74,
+      "SINGLE_THRESHOLD": 167,
       "UNKNOWN": 5
     },
     "SOL": {
-      "DIRECTIONAL_PERIOD": 51,
-      "RANGE_BUCKET": 65,
-      "SINGLE_THRESHOLD": 145,
+      "DIRECTIONAL_PERIOD": 49,
+      "RANGE_BUCKET": 74,
+      "SINGLE_THRESHOLD": 158,
       "UNKNOWN": 4
     },
     "XRP": {
-      "DIRECTIONAL_PERIOD": 51,
-      "RANGE_BUCKET": 65,
-      "SINGLE_THRESHOLD": 130,
+      "DIRECTIONAL_PERIOD": 49,
+      "RANGE_BUCKET": 74,
+      "SINGLE_THRESHOLD": 143,
       "UNKNOWN": 2
     }
   },
   "class_count": {
-    "DIRECTIONAL_PERIOD": 203,
-    "RANGE_BUCKET": 264,
-    "SINGLE_THRESHOLD": 589,
+    "DIRECTIONAL_PERIOD": 197,
+    "RANGE_BUCKET": 300,
+    "SINGLE_THRESHOLD": 639,
     "UNKNOWN": 64
   },
-  "total_markets_tagged": 1120
+  "total_markets_tagged": 1200
 }

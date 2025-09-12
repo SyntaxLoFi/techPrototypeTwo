@@ -22,6 +22,7 @@ Date: 2025-01-10
 """
 
 import numpy as np
+import os
 from typing import Dict, Tuple, Optional, List, Any
 import logging
 from collections import Counter
@@ -73,6 +74,13 @@ class ExpectedValueFilter:
         """
         Initialize filter with configurable thresholds.
         """
+        # Allow environment overrides without changing call sites
+        try:
+            if os.getenv("MIN_EV"):        min_ev = float(os.getenv("MIN_EV"))       # type: ignore
+            if os.getenv("MIN_SHARPE"):    min_sharpe = float(os.getenv("MIN_SHARPE"))  # type: ignore
+            if os.getenv("MIN_KELLY"):     min_kelly = float(os.getenv("MIN_KELLY"))  # type: ignore
+        except Exception:
+            pass
         self.min_ev = float(min_ev)
         self.min_sharpe = float(min_sharpe)
         self.min_kelly = float(min_kelly)
