@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover
 from utils.log_gate import reason_debug  # type: ignore
 from utils.step_debugger import get_step_debugger  # type: ignore
 from utils.debug_recorder import get_recorder  # type: ignore
+from utils.validation_audit import emit as _audit_emit
 
 # Optional deps — degrade gracefully when missing
 try:
@@ -100,6 +101,21 @@ class OptionHedgeBuilder:
                     try:
                         all_options = oc.get_all_options() or []
                         hedge_instruments["options"] = all_options
+                        try:
+                            _audit_emit({
+                                "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                                "stage": "pre_strategy",
+                                "pm_market_id": contract.get("id") or contract.get("question_id") or contract.get("slug"),
+                                "pm_question": contract.get("question"),
+                                "pm_ticker": contract.get("ticker") or contract.get("symbol") or contract.get("asset") or contract.get("pm_asset"),
+                                "pm_resolution_iso": contract.get("end_date") or contract.get("endDate"),
+                                "pm_resolution_date": (contract.get("end_date") or contract.get("endDate")),
+                                "options_count_seen": len(all_options or []),
+                                "fields_checked": ["currency","strike_price","yes_price","no_price","days_to_expiry"],
+                                "raw_currency_field": contract.get("currency"),
+                            })
+                        except Exception:
+                            pass
                         # -- Consumer-side checkpoint (single JSON) --
                         # Right after options are made available to the hedge builder,
                         # record a compact summary proving whether options are present

@@ -23,12 +23,10 @@ from typing import Dict, List, Optional, Tuple, Any, Sequence
 import numpy as np
 from datetime import datetime, timezone, date
 from math import erf, log, sqrt
-import math
-import os
-import logging
-import warnings
+import math, os, logging, warnings
 from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN
 from utils.instrument_capture import BASE_UNIT
+from utils.validation_audit import emit as _audit_emit
 
 logger = logging.getLogger("VarianceSwapStrategy")
 
@@ -80,6 +78,16 @@ except Exception:
                 and (for additional expiries) within max_expiry_gap_days when far expiries are allowed.
                 Far expiries allowed only if (expiry_policy == 'allow_far_with_unwind') and (options_unwind_model != 'intrinsic_only').
                 """
+                try:
+                    _audit_emit({
+                        "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                        "stage": "entered_filter_options_by_expiry",
+                        "pm_market_id": getattr(self, "_last_pm_market_id", None),
+                        "pm_days_to_expiry": float(pm_days_to_expiry or 0.0),
+                        "options_len": int(len(options or [])),
+                    })
+                except Exception:
+                    pass
                 if not options:
                     return []
                 cutoff_days = float(pm_days_to_expiry or 0.0)
@@ -545,6 +553,12 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
             else:
                 self.logger.info("[variance] skip: NO price unavailable and NO book empty")
                 return []
+        # carry PM context for audit breadcrumb
+        try:
+            self._last_pm_market_id = (polymarket_contract.get('id')
+                or polymarket_contract.get('question_id') or polymarket_contract.get('slug'))
+        except Exception:
+            self._last_pm_market_id = None
         days_to_expiry = polymarket_contract.get('days_to_expiry')
         
         # Filter options that expire after PM

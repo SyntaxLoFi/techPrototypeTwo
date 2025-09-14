@@ -7,7 +7,8 @@ Ensures consistent behavior across different hedging approaches.
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, Sequence
-import logging
+import logging, os
+from utils.validation_audit import emit as _audit_emit
 
 
 class BaseStrategy(ABC):
@@ -92,14 +93,35 @@ class BaseStrategy(ABC):
             True if inputs are valid, False otherwise
         """
         # Strategy-specific required fields (subclass may override REQUIRED_FIELDS)
+        reason = None
+        missing = None
         for field in self.REQUIRED_FIELDS:
             if field not in polymarket_contract:
                 self.logger.debug(f"Missing required field: {field}")
+                missing = field
+                reason = f"MISSING_{field.upper()}"
+                _audit_emit({
+                    "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                    "stage": "validate_inputs",
+                    "validation_pass": False,
+                    "reason_code": reason,
+                    "fields_seen": list(polymarket_contract.keys()),
+                    "pm_market_id": polymarket_contract.get("id") or polymarket_contract.get("question_id") or polymarket_contract.get("slug"),
+                    "pm_question": polymarket_contract.get("question"),
+                    "pm_currency_field": polymarket_contract.get("currency"),
+                })
                 return False
         
         # Check spot price only if it's relevant for the strategy
         if 'strike_price' in self.REQUIRED_FIELDS and current_spot <= 0:
             self.logger.debug(f"Invalid spot price: {current_spot}")
+            _audit_emit({
+                "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                "stage": "validate_inputs",
+                "validation_pass": False,
+                "reason_code": "BAD_SPOT",
+                "current_spot": current_spot,
+            })
             return False
         
         # Price sanity checks (only if present)
@@ -120,10 +142,26 @@ class BaseStrategy(ABC):
             # Check for extreme prices that likely have no liquidity
             if yes_price < min_price_threshold:
                 self.logger.debug(f"YES price too low for liquidity: {yes_price:.3f} < {min_price_threshold}")
+                _audit_emit({
+                    "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                    "stage": "validate_inputs",
+                    "validation_pass": False,
+                    "reason_code": "YES_TOO_LOW",
+                    "yes_price": yes_price,
+                    "min_price_threshold": min_price_threshold,
+                })
                 return False
             
             if yes_price > max_price_threshold:
                 self.logger.debug(f"YES price too high for liquidity: {yes_price:.3f} > {max_price_threshold}")
+                _audit_emit({
+                    "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                    "stage": "validate_inputs",
+                    "validation_pass": False,
+                    "reason_code": "YES_TOO_HIGH",
+                    "yes_price": yes_price,
+                    "max_price_threshold": max_price_threshold,
+                })
                 return False
         
         if no_price is not None:
@@ -138,8 +176,27 @@ class BaseStrategy(ABC):
             s = yes_price + no_price
             if abs(s - 1.0) > max_sum_deviation:
                 self.logger.warning(f"Prices don't sum properly: YES={yes_price:.3f} + NO={no_price:.3f} = {(yes_price + no_price):.3f}")
+                _audit_emit({
+                    "run_id": os.getenv("APP_RUN_ID", "unknown"),
+                    "stage": "validate_inputs",
+                    "validation_pass": False,
+                    "reason_code": "SUM_DEVIATION",
+                    "yes_price": yes_price,
+                    "no_price": no_price,
+                    "sum": s,
+                    "max_sum_deviation": max_sum_deviation,
+                })
                 return False
         
+        _audit_emit({
+            "run_id": os.getenv("APP_RUN_ID", "unknown"),
+            "stage": "validate_inputs",
+            "validation_pass": True,
+            "reason_code": "OK",
+            "pm_market_id": polymarket_contract.get("id") or polymarket_contract.get("question_id") or polymarket_contract.get("slug"),
+            "pm_question": polymarket_contract.get("question"),
+            "currency": polymarket_contract.get("currency"),
+        })
         return True
     
     def calculate_pm_payoffs(

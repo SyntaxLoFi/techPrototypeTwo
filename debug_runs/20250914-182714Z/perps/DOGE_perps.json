@@ -1,0 +1,42 @@
+{
+  "instrument_name": "DOGE-PERP",
+  "currency": "DOGE",
+  "mark_price": 0.2787375301027918,
+  "index_price": 0.27873,
+  "best_bid": 0.27866,
+  "best_ask": 0.27894,
+  "spread": 0.00028000000000000247,
+  "spread_pct": 0.10045292426059207,
+  "execution_prices": {
+    "buy_small": 0.27894,
+    "sell_small": 0.27866,
+    "buy_medium": 0.27901000000000004,
+    "sell_medium": 0.27859,
+    "buy_large": 0.27908,
+    "sell_large": 0.27852
+  },
+  "funding_rate": 1.25e-05,
+  "funding_rate_8h": 0.0001,
+  "premium_index": 2.7015760025144173e-05,
+  "interest_rate_8h": 0.0001,
+  "funding_interval_hours": 1.0,
+  "avg_funding_rate": 1.2500000000000002e-05,
+  "funding_rate_std": 1.6940658945086007e-21,
+  "funding_rate_min": 1.25e-05,
+  "funding_rate_max": 1.25e-05,
+  "funding_rate_percentiles": {
+    "5": 1.25e-05,
+    "25": 1.25e-05,
+    "50": 1.25e-05,
+    "75": 1.25e-05,
+    "95": 1.25e-05
+  },
+  "taker_fee": 0.0003,
+  "maker_fee": 0.0001,
+  "base_fee": 0.1,
+  "tick_size": 1e-05,
+  "contract_size": 1.0,
+  "is_active": true,
+  "timestamp": "2025-09-14T14:30:23.796378",
+  "funding_data_points": 717
+}
