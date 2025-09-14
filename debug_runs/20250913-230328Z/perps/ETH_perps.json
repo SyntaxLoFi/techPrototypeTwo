@@ -1,0 +1,42 @@
+{
+  "instrument_name": "ETH-PERP",
+  "currency": "ETH",
+  "mark_price": 4663.839511918618,
+  "index_price": 4664.88,
+  "best_bid": 4663.95,
+  "best_ask": 4664.26,
+  "spread": 0.3100000000004002,
+  "spread_pct": 0.006646883950620159,
+  "execution_prices": {
+    "buy_small": 4664.26,
+    "sell_small": 4663.95,
+    "buy_medium": 4664.337500000001,
+    "sell_medium": 4663.8724999999995,
+    "buy_large": 4664.415000000001,
+    "sell_large": 4663.795
+  },
+  "funding_rate": 1.25e-05,
+  "funding_rate_8h": 0.0001,
+  "premium_index": -0.00022304712691047495,
+  "interest_rate_8h": 0.0001,
+  "funding_interval_hours": 1.0,
+  "avg_funding_rate": 7.111802777777781e-06,
+  "funding_rate_std": 1.6245926569279965e-05,
+  "funding_rate_min": -0.000143754,
+  "funding_rate_max": 0.000109591,
+  "funding_rate_percentiles": {
+    "5": -2.4812599999999997e-05,
+    "25": 1.25e-05,
+    "50": 1.25e-05,
+    "75": 1.25e-05,
+    "95": 1.25e-05
+  },
+  "taker_fee": 0.0003,
+  "maker_fee": 0.0001,
+  "base_fee": 0.1,
+  "tick_size": 0.01,
+  "contract_size": 1.0,
+  "is_active": true,
+  "timestamp": "2025-09-13T19:06:01.889134",
+  "funding_data_points": 720
+}

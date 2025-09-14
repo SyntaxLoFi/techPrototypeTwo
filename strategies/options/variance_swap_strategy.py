@@ -294,6 +294,23 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         volatility_sensitivity_threshold: float = 0.0,
         **kwargs
     ):
+        import sys
+        import datetime
+        print(f"\n{'*'*80}", file=sys.stderr)
+        print(f"VARIANCE SWAP STRATEGY INITIALIZED!", file=sys.stderr)
+        print(f"{'*'*80}\n", file=sys.stderr)
+        
+        # Also write to a dedicated debug file
+        debug_log_path = "debug_runs/variance_swap_debug.log"
+        try:
+            with open(debug_log_path, "a") as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"[{datetime.datetime.now().isoformat()}] VARIANCE SWAP STRATEGY INITIALIZED\n")
+                f.write(f"Config: expiry_policy={getattr(cfg, 'hedging', {}).get('variance', {}).get('expiry_policy', 'unknown')}\n")
+                f.write(f"{'='*80}\n")
+        except Exception as e:
+            print(f"Failed to write to debug log: {e}", file=sys.stderr)
+        
         super().__init__(risk_free_rate)
         self._sparse_logged = False
         self._logged_option_examples = False  # ensures we only dump sample quotes once per run
@@ -460,7 +477,25 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         """
         Evaluate variance swap hedging opportunities.
         """
+        # Debug logging
+        import datetime
+        debug_log_path = "debug_runs/variance_swap_debug.log"
+        try:
+            with open(debug_log_path, "a") as f:
+                f.write(f"\n[{datetime.datetime.now().isoformat()}] evaluate_opportunities CALLED\n")
+                f.write(f"  - PM Market: {polymarket_contract.get('question', 'N/A')}\n")
+                f.write(f"  - Currency: {polymarket_contract.get('currency', 'N/A')}\n")
+                f.write(f"  - Current spot: {current_spot}\n")
+                f.write(f"  - Options available: {len(hedge_instruments.get('options', []))}\n")
+        except Exception:
+            pass
+            
         if not self.validate_inputs(polymarket_contract, current_spot):
+            try:
+                with open(debug_log_path, "a") as f:
+                    f.write(f"  - VALIDATION FAILED\n")
+            except Exception:
+                pass
             return []
         
         options_data = [self._normalize_option_record(o) for o in (hedge_instruments.get('options') or [])]
@@ -1561,6 +1596,68 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
           3) sort by |expiry_dte - pm_dte|
           4) scan forward until we have at most `max_expiries_considered` valid expiries
         """
+        # --- AGGRESSIVE DEBUG: START ---
+        import sys
+        import datetime
+        print(f"\n\n{'='*80}", file=sys.stderr)
+        print(f"VARIANCE SWAP: filter_options_by_expiry CALLED!", file=sys.stderr)
+        print(f"Options count: {len(options) if options else 0}", file=sys.stderr)
+        print(f"PM days to expiry: {pm_days_to_expiry}", file=sys.stderr)
+        print(f"{'='*80}\n", file=sys.stderr)
+        
+        # Write to dedicated debug file
+        debug_log_path = "debug_runs/variance_swap_debug.log"
+        try:
+            with open(debug_log_path, "a") as f:
+                f.write(f"\n[{datetime.datetime.now().isoformat()}] filter_options_by_expiry CALLED\n")
+                f.write(f"  - Options count: {len(options) if options else 0}\n")
+                f.write(f"  - PM days to expiry: {pm_days_to_expiry}\n")
+                f.write(f"  - Inclusive: {inclusive}\n")
+                if options and len(options) > 0:
+                    # Sample first few options
+                    f.write(f"  - Sample options (first 3):\n")
+                    for i, opt in enumerate(options[:3]):
+                        f.write(f"    Option {i}: expiry={opt.get('expiry_date', 'N/A')}, dte={opt.get('days_to_expiry', 'N/A')}\n")
+        except Exception as e:
+            print(f"Failed to write to debug log: {e}", file=sys.stderr)
+        
+        # --- DEBUG: inventory BEFORE selection ---
+        import json, os, math, datetime as _dt
+        _audit_path = os.environ.get("EXPIRY_DEBUG_PATH", "debug_runs/expiry_debug.jsonl")
+        try:
+            os.makedirs(os.path.dirname(_audit_path), exist_ok=True)
+        except Exception:
+            pass
+
+        try:
+            inv = {}
+            for o in (options or []):
+                exp = o.get("expiry_date") or o.get("expiration") or o.get("expiry")
+                dte = o.get("days_to_expiry")
+                key = (str(exp), None if dte is None else float(dte))
+                inv[key] = inv.get(key, 0) + 1
+            row = {
+                "ts": _dt.datetime.utcnow().isoformat() + "Z",
+                "stage": "pre_filter_inventory",
+                "pm_days_to_expiry": float(pm_days_to_expiry or 0.0),
+                "pre_filter_expiries": [
+                    {"expiry": k[0], "rep_days_to_expiry": k[1], "count": c}
+                    for k, c in sorted(inv.items(), key=lambda kv: (kv[0][1] if kv[0][1] is not None else 1e9))
+                ],
+            }
+            with open(_audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+            print(f"DEBUG: Wrote expiry debug to {_audit_path}", file=sys.stderr)
+            
+            # Also note in our debug log
+            with open(debug_log_path, "a") as f:
+                f.write(f"  - Wrote expiry inventory to {_audit_path}\n")
+                f.write(f"  - Found {len(inv)} unique expiries\n")
+        except Exception as e:
+            print(f"DEBUG: Failed to write expiry debug: {e}", file=sys.stderr)
+            with open(debug_log_path, "a") as f:
+                f.write(f"  - ERROR writing expiry debug: {e}\n")
+
         from math import inf
         pm_dte = float(pm_days_to_expiry or 0.0)
         allow_far = (self.expiry_policy == "allow_far_with_unwind" and OPTIONS_UNWIND_MODEL != "intrinsic_only")

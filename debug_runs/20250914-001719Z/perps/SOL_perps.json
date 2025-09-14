@@ -1,0 +1,42 @@
+{
+  "instrument_name": "SOL-PERP",
+  "currency": "SOL",
+  "mark_price": 242.6574546769878,
+  "index_price": 242.53,
+  "best_bid": 242.54,
+  "best_ask": 245.38,
+  "spread": 2.8400000000000034,
+  "spread_pct": 1.170374099481285,
+  "execution_prices": {
+    "buy_small": 245.38,
+    "sell_small": 242.54,
+    "buy_medium": 246.09,
+    "sell_medium": 241.82999999999998,
+    "buy_large": 246.8,
+    "sell_large": 241.12
+  },
+  "funding_rate": 1.25e-05,
+  "funding_rate_8h": 0.0001,
+  "premium_index": 0.0005255212839146084,
+  "interest_rate_8h": 0.0001,
+  "funding_interval_hours": 1.0,
+  "avg_funding_rate": 1.2111098611111116e-05,
+  "funding_rate_std": 1.0878504435608491e-05,
+  "funding_rate_min": -0.000279465,
+  "funding_rate_max": 1.8478e-05,
+  "funding_rate_percentiles": {
+    "5": 1.25e-05,
+    "25": 1.25e-05,
+    "50": 1.25e-05,
+    "75": 1.25e-05,
+    "95": 1.25e-05
+  },
+  "taker_fee": 0.0003,
+  "maker_fee": 0.0001,
+  "base_fee": 0.1,
+  "tick_size": 0.01,
+  "contract_size": 1.0,
+  "is_active": true,
+  "timestamp": "2025-09-13T20:20:11.557088",
+  "funding_data_points": 720
+}
