@@ -24,6 +24,8 @@ import numpy as np
 from datetime import datetime, timezone, date
 from math import erf, log, sqrt
 import math, os, logging, warnings
+import json
+from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN
 from utils.instrument_capture import BASE_UNIT
 from utils.validation_audit import emit as _audit_emit
@@ -78,16 +80,20 @@ except Exception:
                 and (for additional expiries) within max_expiry_gap_days when far expiries are allowed.
                 Far expiries allowed only if (expiry_policy == 'allow_far_with_unwind') and (options_unwind_model != 'intrinsic_only').
                 """
-                try:
-                    _audit_emit({
-                        "run_id": os.getenv("APP_RUN_ID", "unknown"),
-                        "stage": "entered_filter_options_by_expiry",
-                        "pm_market_id": getattr(self, "_last_pm_market_id", None),
-                        "pm_days_to_expiry": float(pm_days_to_expiry or 0.0),
-                        "options_len": int(len(options or [])),
-                    })
-                except Exception:
-                    pass
+                # TEST-ONLY breadcrumb (guarded): prove we reached expiry selection
+                if os.getenv("VALIDATION_AUDIT_ENABLE", "0") == "1":
+                    try:
+                        path = os.getenv("VALIDATION_AUDIT_PATH", "analysis/validation_audit.jsonl")
+                        Path(path).parent.mkdir(parents=True, exist_ok=True)
+                        with open(path, "a") as fh:
+                            fh.write(json.dumps({
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "event": "entered_filter_options_by_expiry",
+                                "pm_days_to_expiry": float(pm_days_to_expiry or 0.0),
+                                "num_options": int(len(options or []))
+                            }) + "\n")
+                    except Exception:
+                        pass
                 if not options:
                     return []
                 cutoff_days = float(pm_days_to_expiry or 0.0)

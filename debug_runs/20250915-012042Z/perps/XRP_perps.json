@@ -1,0 +1,42 @@
+{
+  "instrument_name": "XRP-PERP",
+  "currency": "XRP",
+  "mark_price": 3.01440959520061,
+  "index_price": 3.01508,
+  "best_bid": 3.013,
+  "best_ask": 3.02728,
+  "spread": 0.014280000000000292,
+  "spread_pct": 0.47372460672684247,
+  "execution_prices": {
+    "buy_small": 3.02728,
+    "sell_small": 3.013,
+    "buy_medium": 3.03085,
+    "sell_medium": 3.00943,
+    "buy_large": 3.0344200000000003,
+    "sell_large": 3.0058599999999998
+  },
+  "funding_rate": 1.25e-05,
+  "funding_rate_8h": 0.0001,
+  "premium_index": -0.00022235058419358707,
+  "interest_rate_8h": 0.0001,
+  "funding_interval_hours": 1.0,
+  "avg_funding_rate": 1.25e-05,
+  "funding_rate_std": 0.0,
+  "funding_rate_min": 1.25e-05,
+  "funding_rate_max": 1.25e-05,
+  "funding_rate_percentiles": {
+    "5": 1.25e-05,
+    "25": 1.25e-05,
+    "50": 1.25e-05,
+    "75": 1.25e-05,
+    "95": 1.25e-05
+  },
+  "taker_fee": 0.0003,
+  "maker_fee": 0.0001,
+  "base_fee": 0.1,
+  "tick_size": 1e-05,
+  "contract_size": 1.0,
+  "is_active": true,
+  "timestamp": "2025-09-14T21:23:28.149370",
+  "funding_data_points": 685
+}

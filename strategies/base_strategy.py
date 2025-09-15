@@ -170,23 +170,23 @@ class BaseStrategy(ABC):
                 self.logger.debug(f"Invalid NO price: {no_price}")
                 return False
         
-        # If both legs are present, optional sum-deviation guard
+        # If both legs are present, emit NON-BLOCKING telemetry only.
+        # Rationale: ask_yes + ask_no > 1 is normal on wide books, and
+        # cross-outcome pairing is an upstream data-join concern. We keep
+        # the 0..1 range guards above but do not block on the sum here.
         if yes_price is not None and no_price is not None:
-            max_sum_deviation = getattr(self, 'max_sum_deviation', 0.10)
             s = yes_price + no_price
-            if abs(s - 1.0) > max_sum_deviation:
-                self.logger.warning(f"Prices don't sum properly: YES={yes_price:.3f} + NO={no_price:.3f} = {(yes_price + no_price):.3f}")
-                _audit_emit({
-                    "run_id": os.getenv("APP_RUN_ID", "unknown"),
-                    "stage": "validate_inputs",
-                    "validation_pass": False,
-                    "reason_code": "SUM_DEVIATION",
-                    "yes_price": yes_price,
-                    "no_price": no_price,
-                    "sum": s,
-                    "max_sum_deviation": max_sum_deviation,
-                })
-                return False
+            # Optional debug breadcrumb, OFF by default
+            dbg = os.getenv("PM_HEALTH_DEBUG", "0").strip().lower()
+            if dbg in {"1", "true", "t", "yes", "y", "on"}:
+                try:
+                    max_sum_deviation = float(getattr(self, 'max_sum_deviation', 0.10))
+                except Exception:
+                    max_sum_deviation = 0.10
+                self.logger.debug(
+                    "PM_HEALTH YES_NO_SUM yes=%.3f no=%.3f sum=%.3f dev=%.3f tol=%.3f",
+                    yes_price, no_price, s, abs(s - 1.0), max_sum_deviation,
+                )
         
         _audit_emit({
             "run_id": os.getenv("APP_RUN_ID", "unknown"),

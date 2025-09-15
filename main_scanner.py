@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from utils.timebox import compute_days_to_expiry
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -208,6 +209,21 @@ def build_scanners(logger: Optional[logging.Logger] = None, *, recorder=None) ->
             ccy = str(raw).upper().strip()
             if not ccy:
                 continue
+            # NEW: ensure currency stamped onto the *contract dict* used by strategies
+            try:
+                m.setdefault("currency", ccy)
+            except Exception:
+                pass
+            # NEW: compute days_to_expiry on the same dict reaching validation
+            try:
+                if m.get("days_to_expiry") is None:
+                    end_val = m.get("end_date") or m.get("endDate") or m.get("endDateIso") or m.get("resolution_ts")
+                    dte = compute_days_to_expiry(end_val)
+                    if dte is not None:
+                        m["days_to_expiry"] = float(dte)
+            except Exception:
+                # Safe: leave absent if we cannot parse; strategy gates remain unchanged
+                pass
             contracts_by_ccy.setdefault(ccy, []).append(m)
     except Exception as e:
         logger.warning("Polymarket fetch failed: %s", e)

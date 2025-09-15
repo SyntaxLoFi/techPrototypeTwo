@@ -322,7 +322,9 @@ class PolymarketFetcher:
                     m["yes_ask"] = info["ask"];      m["yes_ask_qty"] = info["ask_qty"]
                     m["yes_mid"] = info["mid"]
                     # Back-compat fields for liquidity gate and pricing
-                    m.setdefault("yes_price", info["ask"])
+                    # Do not overwrite Gamma prices if already stamped
+                    if "yes_price" not in m:
+                        m["yes_price"] = info["ask"]
                     # Use *either* side for liquidity gates; some books have only bids or only asks
                     qty = float(max(info.get("ask_qty") or 0.0, info.get("bid_qty") or 0.0))
                     m["yes_qty"] = qty
@@ -331,7 +333,8 @@ class PolymarketFetcher:
                     m["no_bid"] = info["bid"];       m["no_bid_qty"] = info["bid_qty"]
                     m["no_ask"] = info["ask"];       m["no_ask_qty"] = info["ask_qty"]
                     m["no_mid"] = info["mid"]
-                    m.setdefault("no_price", info["ask"])
+                    if "no_price" not in m:
+                        m["no_price"] = info["ask"]
                     # Use *either* side for liquidity gates; some books have only bids or only asks
                     qty = float(max(info.get("ask_qty") or 0.0, info.get("bid_qty") or 0.0))
                     m["no_qty"] = qty

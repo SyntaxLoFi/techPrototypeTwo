@@ -1,12 +1,20 @@
---- a/strategies/options/variance_swap_strategy.py
-+++ b/strategies/options/variance_swap_strategy.py
-@@
--        days_to_expiry = polymarket_contract.get('days_to_expiry')
-+        # carry PM context for audit breadcrumb
-+        try:
-+            self._last_pm_market_id = (polymarket_contract.get('id')
-+                or polymarket_contract.get('question_id') or polymarket_contract.get('slug'))
-+        except Exception:
-+            self._last_pm_market_id = None
-+        days_to_expiry = polymarket_contract.get('days_to_expiry')
-         suitable_options = self.filter_options_by_expiry(options_data, days_to_expiry)
+diff --git a/scripts/data_collection/polymarket_fetcher_v2.py b/scripts/data_collection/polymarket_fetcher_v2.py
+index 9d048de..bcde234 100644
+--- a/scripts/data_collection/polymarket_fetcher_v2.py
++++ b/scripts/data_collection/polymarket_fetcher_v2.py
+@@ -140,10 +140,16 @@ def _enrich_with_orderbooks(...):
+-            if key in ("YES", "UP"):
++            if key in ("YES", "UP"):
+                 ...
+-                m.setdefault("yes_price", info["ask"])
++                # Do not overwrite Gamma prices if already stamped
++                if "yes_price" not in m:
++                    m["yes_price"] = info["ask"]
+                 ...
+-            elif key in ("NO", "DOWN"):
++            elif key in ("NO", "DOWN"):
+                 ...
+-                m.setdefault("no_price", info["ask"])
++                if "no_price" not in m:
++                    m["no_price"] = info["ask"]
+                 ...
