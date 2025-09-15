@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from scripts.data_collection.polymarket_client import PolymarketClient  # for CLOB books/prices
+import scripts.data_collection.pm_ingest as pm_ingest
 
 logger = logging.getLogger(__name__)
 try:
@@ -388,7 +389,7 @@ class ArbitrageScanner:
         self.logger.info("Saved %d opportunities to %s", len(self.opportunities), str(path))
 
 
-async def main() -> None:
+async def main(*args, **kwargs) -> None:
     try:
         from logger_config import setup_logging  # type: ignore
         setup_logging()
@@ -397,6 +398,11 @@ async def main() -> None:
 
     log = logging.getLogger("main_scanner")
     log.info("🚀 Polymarket–Lyra Arbitrage Scanner")
+    
+    # Use Gamma-only markets
+    pm_markets = pm_ingest.load_polymarket_markets()
+    # pm_markets now carry yes_price/no_price from Gamma exclusively,
+    # plus canonical IDs/dates and price_source="gamma_outcome".
 
     try:
         from orchestrator import Orchestrator  # type: ignore

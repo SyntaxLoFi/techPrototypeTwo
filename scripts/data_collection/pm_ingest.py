@@ -14,6 +14,10 @@ from typing import Iterable, List
 from .pm_classifier import classify_market, is_crypto_text
 from datetime import datetime, timezone
 from typing import Optional
+import os
+from typing import List, Dict, Any
+from market_data.polymarket_gamma import load_polymarket_gamma_normalized
+import json
 
 try:
     # Only used in type hints; safe if PolymarketClient is not present at import time in tests
@@ -63,6 +67,32 @@ def tag_from_local_markets(markets: Iterable[dict]) -> List[dict]:
             continue
         out.append(classify_market(event, m))
     return out
+
+
+def load_polymarket_markets(*args, **kwargs) -> List[Dict[str, Any]]:
+    """
+    Gamma-only ingestion wrapper.
+    Pulls markets from Gamma List-markets and returns normalized dicts with:
+      pm_market_id, conditionId, clobTokenIds, endDate, days_to_expiry,
+      yes_price, no_price, price_source="gamma_outcome",
+      pm_last_trade_price, pm_best_bid, pm_best_ask
+    """
+    # Default: strictly Gamma
+    use_clob = os.getenv("PM_USE_CLOB", "0") == "1"
+    if use_clob:
+        # Diagnostic-only, but we NEVER assign prices from CLOB here.
+        # (Keep any legacy code behind this gate. Do not overwrite y/n prices.)
+        pass
+    markets = load_polymarket_gamma_normalized()
+    return markets
+
+
+def write_polymarket_snapshot(out_path: str = "debug_runs/latest/polymarket/pm_tagged_live.json") -> str:
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    normalized = load_polymarket_markets()
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(normalized, f, ensure_ascii=False, indent=2)
+    return out_path
 
 
 def fetch_and_tag_live(client: "PolymarketClient", *, limit_per_page: int = 250, include_closed: bool = False) -> List[dict]:

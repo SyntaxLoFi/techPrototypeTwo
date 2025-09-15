@@ -1,20 +1,57 @@
-diff --git a/scripts/data_collection/polymarket_fetcher_v2.py b/scripts/data_collection/polymarket_fetcher_v2.py
-index 9d048de..bcde234 100644
---- a/scripts/data_collection/polymarket_fetcher_v2.py
-+++ b/scripts/data_collection/polymarket_fetcher_v2.py
-@@ -140,10 +140,16 @@ def _enrich_with_orderbooks(...):
--            if key in ("YES", "UP"):
-+            if key in ("YES", "UP"):
-                 ...
--                m.setdefault("yes_price", info["ask"])
-+                # Do not overwrite Gamma prices if already stamped
-+                if "yes_price" not in m:
-+                    m["yes_price"] = info["ask"]
-                 ...
--            elif key in ("NO", "DOWN"):
-+            elif key in ("NO", "DOWN"):
-                 ...
--                m.setdefault("no_price", info["ask"])
-+                if "no_price" not in m:
-+                    m["no_price"] = info["ask"]
-                 ...
+*** Begin Patch
+*** Update File: market_data/polymarket_gamma.py
+@@
+-def fetch_markets_from_gamma(url: str = "https://gamma-api.polymarket.com/markets",
+-                             fetcher=None) -> List[Dict[str, Any]]:
++def fetch_markets_from_gamma(url: str = "https://gamma-api.polymarket.com/markets",
++                             fetcher=None,
++                             query: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+@@
+-    if fetcher is None:
++    if fetcher is None:
+         if requests is None:
+             raise RuntimeError("requests not available; install requirements first.")
+-        resp = requests.get(url, timeout=30)
++        # Default to only live (open) markets at the HTTP layer
++        params = {"closed": "false"}
++        if query:
++            params.update(query)
++        resp = requests.get(url, params=params, timeout=30)
+         resp.raise_for_status()
+         return resp.json()
+     else:
+-        resp = fetcher(url)
++        # Test hook: fetcher can ignore 'query' or consume it
++        resp = fetcher(url) if query is None else fetcher(url, query)
+         return resp.json() if hasattr(resp, "json") else resp
++
++def _is_live_market(gm: Dict[str, Any]) -> bool:
++    # Live = not closed, active true, not archived
++    if gm.get("closed") is True:
++        return False
++    if gm.get("archived") is True:
++        return False
++    return gm.get("active") is True
+@@
+-def load_polymarket_gamma_normalized(now: Optional[datetime]=None,
+-                                     url: str="https://gamma-api.polymarket.com/markets") -> List[Dict[str, Any]]:
+-    raw = fetch_markets_from_gamma(url=url)
++def load_polymarket_gamma_normalized(now: Optional[datetime]=None,
++                                     url: str="https://gamma-api.polymarket.com/markets",
++                                     fetcher=None,
++                                     live_only: bool = True) -> List[Dict[str, Any]]:
++    # Query only open markets at the API level; we also post-filter for active/archived.
++    raw = fetch_markets_from_gamma(url=url, fetcher=fetcher, query={"closed": "false"} if live_only else None)
+     out: List[Dict[str, Any]] = []
+-    for gm in raw:
++    for gm in raw:
++        if live_only and not _is_live_market(gm):
++            _health_log(os.getenv("PM_HEALTH_DEBUG", "0") == "1",
++                        "SKIP_NOT_LIVE",
++                        {"id": gm.get("id"), "active": gm.get("active"), "closed": gm.get("closed"), "archived": gm.get("archived")})
++            continue
+         m = normalize_gamma_market(gm, now=now)
+         if m is not None:
+             out.append(m)
+     return out
+*** End Patch

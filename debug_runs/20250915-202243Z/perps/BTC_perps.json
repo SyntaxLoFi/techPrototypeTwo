@@ -1,0 +1,42 @@
+{
+  "instrument_name": "BTC-PERP",
+  "currency": "BTC",
+  "mark_price": 115321.66536563792,
+  "index_price": 115329.4,
+  "best_bid": 115294.0,
+  "best_ask": 115329.2,
+  "spread": 35.19999999999709,
+  "spread_pct": 0.030523319177183456,
+  "execution_prices": {
+    "buy_small": 115329.2,
+    "sell_small": 115294.0,
+    "buy_medium": 115338.0,
+    "sell_medium": 115285.2,
+    "buy_large": 115346.79999999999,
+    "sell_large": 115276.4
+  },
+  "funding_rate": 1.25e-05,
+  "funding_rate_8h": 0.0001,
+  "premium_index": -6.706559092541754e-05,
+  "interest_rate_8h": 0.0001,
+  "funding_interval_hours": 1.0,
+  "avg_funding_rate": 2.3508242718446605e-05,
+  "funding_rate_std": 2.1219593988075212e-05,
+  "funding_rate_min": 1.25e-05,
+  "funding_rate_max": 0.000154719,
+  "funding_rate_percentiles": {
+    "5": 1.25e-05,
+    "25": 1.25e-05,
+    "50": 1.2518e-05,
+    "75": 2.7913e-05,
+    "95": 5.6831e-05
+  },
+  "taker_fee": 0.0003,
+  "maker_fee": 0.0001,
+  "base_fee": 0.1,
+  "tick_size": 0.1,
+  "contract_size": 1.0,
+  "is_active": true,
+  "timestamp": "2025-09-15T16:28:56.263892",
+  "funding_data_points": 721
+}

@@ -1,0 +1,20 @@
+{"ts": 1757967761, "msg": "MISMATCHED_OUTCOME_LEN", "payload": {"id": "502517", "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": null}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516706", "y": 0.0305, "n": 0.9695}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516710", "y": 0.095, "n": 0.905}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516711", "y": 0.055, "n": 0.945}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516712", "y": 0.0325, "n": 0.9675}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516713", "y": 0.0295, "n": 0.9705}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516714", "y": 0.3, "n": 0.7}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516715", "y": 0.023, "n": 0.977}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516716", "y": 0.185, "n": 0.815}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516717", "y": 0.06, "n": 0.94}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516719", "y": 0.155, "n": 0.845}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516720", "y": 0.037, "n": 0.963}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516721", "y": 0.1, "n": 0.9}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516723", "y": 0.011, "n": 0.989}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516724", "y": 0.0325, "n": 0.9675}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516725", "y": 0.32, "n": 0.68}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516726", "y": 0.505, "n": 0.495}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516727", "y": 0.1025, "n": 0.8975}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516728", "y": 0.0175, "n": 0.9825}}
+{"ts": 1757967761, "msg": "NORMALIZED", "payload": {"id": "516729", "y": 0.0075, "n": 0.9925}}

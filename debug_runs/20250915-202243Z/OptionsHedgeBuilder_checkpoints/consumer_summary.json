@@ -1,17 +1,17 @@
 {
-  "currency": "ETH",
-  "contract_hint": "will-ethereum-hit-10000-by-december-31-218-525",
+  "currency": "BTC",
+  "contract_hint": "will-bitcoin-reach-1000000-by-december-31-2025",
   "has_options_flag": true,
   "collector_present": true,
-  "num_options": 602,
+  "num_options": 612,
   "unique_expiries_count": 9,
   "sample_expiries": [
-    "2025-09-15",
     "2025-09-16",
+    "2025-09-17",
     "2025-09-19",
     "2025-09-26",
     "2025-10-03"
   ],
-  "strike_min": 500.0,
-  "strike_max": 18000.0
+  "strike_min": 20000.0,
+  "strike_max": 620000.0
 }
