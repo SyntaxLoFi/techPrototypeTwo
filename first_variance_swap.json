@@ -1,0 +1,129 @@
+{
+  "currency": "BTC",
+  "hedge_type": "options",
+  "strategy": "digital_vertical",
+  "polymarket_contract": {
+    "eventId": null,
+    "eventTitle": "Will Bitcoin hit $150k by December 31, 2026?",
+    "eventDescription": "",
+    "marketId": "573656",
+    "marketSlug": "will-bitcoin-hit-150k-by-december-31-2026",
+    "question": "Will Bitcoin hit $150k by December 31, 2026?",
+    "marketDescription": "This market will immediately resolve to \"Yes\" if any Binance 1 minute candle for Bitcoin (BTC/USDT) has a final \"High\" price equal to or greater than the price specified in the title by 11:59PM ET on the date specified in the title. Otherwise, this market will resolve to \"No.\"\n\nThe resolution source for this market is Binance, specifically the BTC/USDT \"High\" prices available at https://www.binance.com/en/trade/BTC_USDT, with the chart settings on \"1m\" for one-minute candles selected on the top bar.\n\nPlease note that the outcome of this market depends solely on the price data from the Binance BTC/USDT trading pair. Prices from other exchanges, different trading pairs, or spot markets will not be considered for the resolution of this market.",
+    "endDate": "2027-01-01T04:00:00Z",
+    "tokenIds": {
+      "YES": "93694900555669388759405753550770573998169287228984912881955464376232163096213",
+      "NO": "55119388124180116303253993098894090042427725500010038140578121972388485050538"
+    },
+    "asset": "BTC",
+    "marketClass": "SINGLE_THRESHOLD",
+    "binanceSymbol": "BTCUSDT",
+    "relation": "==",
+    "threshold": 150000.0,
+    "strike_price": 150000.0,
+    "is_above": true,
+    "strategies": [
+      "variance_swap",
+      "perpetuals",
+      "options_vanilla"
+    ],
+    "strategyCategories": {
+      "perpetuals": true,
+      "options": true,
+      "hybrid": true
+    },
+    "strategyEligibility": {
+      "options": {
+        "variance_swap": true
+      },
+      "perpetuals": {},
+      "hybrid": {}
+    },
+    "strategyTags": [
+      "options.variance_swap"
+    ],
+    "pm_market_id": "573656",
+    "conditionId": "0x02deb9538f5c123373adaa4ee6217b01745f1662bc902e46ac92f3fe6f8741e8",
+    "clobTokenIds": [
+      "[\"93694900555669388759405753550770573998169287228984912881955464376232163096213\", \"55119388124180116303253993098894090042427725500010038140578121972388485050538\"]"
+    ],
+    "pm_question": "Will Bitcoin hit $150k by December 31, 2026?",
+    "days_to_expiry": 471.56264773207175,
+    "yes_price": 0.605,
+    "no_price": 0.395,
+    "price_source": "gamma_outcome",
+    "yes_bid": 0.01,
+    "yes_bid_qty": 1103900.0,
+    "yes_ask": 0.94,
+    "yes_ask_qty": 5.0,
+    "yes_mid": null,
+    "yes_qty": 1103900.0,
+    "yes_size": 1103900.0,
+    "no_bid": 0.06,
+    "no_bid_qty": 5.0,
+    "no_ask": 0.99,
+    "no_ask_qty": 1103900.0,
+    "no_mid": null,
+    "no_qty": 1103900.0,
+    "no_size": 1103900.0,
+    "currency": "BTC"
+  },
+  "pm_side": "YES",
+  "short_digital": true,
+  "pm_price": 0.605,
+  "position_size_usd": 350.0,
+  "pm_cash_out": 350.0,
+  "profit_if_yes": 228.51239669421489,
+  "profit_if_no": -350.0,
+  "upfront_cashflow": -350.0,
+  "polymarket": {
+    "question": "Will Bitcoin hit $150k by December 31, 2026?",
+    "strike": 150000.0,
+    "yes_price": 0.605,
+    "no_price": 0.395,
+    "is_above": true,
+    "end_date": "2027-01-01T04:00:00Z",
+    "days_to_expiry": 471.56264773207175
+  },
+  "payoff_profile": {
+    "upfront_cashflow": -350.0,
+    "payoff_if_yes": 228.51239669421489,
+    "payoff_if_no": -350.0,
+    "is_state_independent": false
+  },
+  "payoff_if_yes": 228.51239669421489,
+  "payoff_if_no": -350.0,
+  "probabilities": {
+    "pm_implied": 0.6098175587138394,
+    "options_implied": null,
+    "blended": 0.6098175587138394
+  },
+  "metrics": {
+    "dni": null,
+    "prob_of_profit": 0.5,
+    "expected_value": -1.4000000000000001,
+    "adjusted_ev": -1.4000000000000001,
+    "edge_per_downside": null,
+    "kelly_signal": 0.012196351174276865,
+    "is_true_arbitrage": false,
+    "actual_costs": 14.203500000000004,
+    "min_payoff_after_costs": -364.2035,
+    "penalties": {
+      "vega": 0.0,
+      "funding": 0,
+      "liquidity": 5.950000000000003,
+      "total": 5.950000000000003
+    },
+    "sharpe_ratio": null,
+    "kelly_fraction": 0.0,
+    "filter_code": "DROP_DOWNSIDE_TOO_LARGE"
+  },
+  "risk_penalties": {
+    "vega": 0.0,
+    "funding": 0,
+    "liquidity": 5.950000000000003,
+    "total": 5.950000000000003
+  },
+  "rank": 3,
+  "quality_tier": "HIGH_PROBABILITY"
+}

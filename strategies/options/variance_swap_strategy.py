@@ -29,6 +29,8 @@ from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN
 from utils.instrument_capture import BASE_UNIT
 from utils.validation_audit import emit as _audit_emit
+from pm.contract import PMContract, collect_unique_expiries as pm_collect_unique_expiries
+from filters.option_expiry import filter_options_by_expiry
 
 logger = logging.getLogger("VarianceSwapStrategy")
 

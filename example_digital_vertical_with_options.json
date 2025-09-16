@@ -1,0 +1,125 @@
+{
+  "currency": "BTC",
+  "hedge_type": "options",
+  "strategy": "digital_vertical",
+  "polymarket_contract": {
+    "eventId": null,
+    "eventTitle": "Will Bitcoin hit $80k or $150k first?",
+    "eventDescription": "",
+    "marketId": "572403",
+    "marketSlug": "will-bitcoin-hit-80k-or-150k-first",
+    "question": "Will Bitcoin hit $80k or $150k first?",
+    "marketDescription": "This market will resolve to the lower price in the title if Bitcoin\u2019s price dips to that level or below before it hits the higher title price between August 5, 2025 at 10:30 AM ET and December 31, 2026 at 11:59 PM ET. It will resolve to the higher price in the title if Bitcoin\u2019s price first reaches that level or above before it dips to the lower title price during the same period.\n\nIf neither price level is reached within the market timeframe, the market will resolve 50\u201350.\n\nThe resolution source for this market is Binance, specifically the BTC/USDT \"High\" and \"Low\" prices currently available at https://www.binance.com/en/trade/BTC_USDT with \u201c1m\u201d and \u201cCandles\u201d selected on the top bar.\n\nPlease note that this market is about the price according to Binance BTC/USDT, not according to other sources or spot markets.",
+    "endDate": "2027-01-01T04:00:00Z",
+    "tokenIds": {
+      "YES": "46321217963489189592059971462784666798728187359212266717273567726516419208431",
+      "NO": "4063026341038963817025555413567055151736430923249962548720332650506856241704"
+    },
+    "asset": "BTC",
+    "marketClass": "RANGE_BUCKET",
+    "binanceSymbol": "BTCUSDT",
+    "rangeLow": 50.0,
+    "rangeHigh": 50.0,
+    "openSide": null,
+    "strategies": [
+      "perpetuals",
+      "options_spreads"
+    ],
+    "strategyCategories": {
+      "perpetuals": true,
+      "options": true,
+      "hybrid": true
+    },
+    "strategyEligibility": {
+      "options": {
+        "variance_swap": false
+      },
+      "perpetuals": {},
+      "hybrid": {}
+    },
+    "strategyTags": [],
+    "pm_market_id": "572403",
+    "conditionId": "0x5478c62494cb4aeffe77ea23437721eb6d5e50d7b6f668242479e50b09d06979",
+    "clobTokenIds": [
+      "[\"46321217963489189592059971462784666798728187359212266717273567726516419208431\", \"4063026341038963817025555413567055151736430923249962548720332650506856241704\"]"
+    ],
+    "pm_question": "Will Bitcoin hit $80k or $150k first?",
+    "days_to_expiry": 471.562651231493,
+    "yes_price": 0.43000000000000005,
+    "no_price": 0.57,
+    "price_source": "gamma_outcome",
+    "yes_bid": 0.01,
+    "yes_bid_qty": 209898.98,
+    "yes_ask": 0.99,
+    "yes_ask_qty": 310000.0,
+    "yes_mid": null,
+    "yes_qty": 310000.0,
+    "yes_size": 310000.0,
+    "no_bid": 0.01,
+    "no_bid_qty": 310000.0,
+    "no_ask": 0.99,
+    "no_ask_qty": 209898.98,
+    "no_mid": null,
+    "no_qty": 310000.0,
+    "no_size": 310000.0,
+    "currency": "BTC"
+  },
+  "pm_side": "YES",
+  "short_digital": true,
+  "pm_price": 0.43000000000000005,
+  "position_size_usd": 350.0,
+  "pm_cash_out": 350.0,
+  "profit_if_yes": 463.9534883720929,
+  "profit_if_no": -350.0,
+  "upfront_cashflow": -350.0,
+  "polymarket": {
+    "question": "Will Bitcoin hit $80k or $150k first?",
+    "strike": null,
+    "yes_price": 0.43000000000000005,
+    "no_price": 0.57,
+    "is_above": true,
+    "end_date": "2027-01-01T04:00:00Z",
+    "days_to_expiry": 471.562651231493
+  },
+  "payoff_profile": {
+    "upfront_cashflow": -350.0,
+    "payoff_if_yes": 463.9534883720929,
+    "payoff_if_no": -350.0,
+    "is_state_independent": false
+  },
+  "payoff_if_yes": 463.9534883720929,
+  "payoff_if_no": -350.0,
+  "probabilities": {
+    "pm_implied": 0.4349585272101963,
+    "options_implied": null,
+    "blended": 0.4349585272101963
+  },
+  "metrics": {
+    "dni": null,
+    "prob_of_profit": 0.5,
+    "expected_value": -1.4000000000000001,
+    "adjusted_ev": -1.4000000000000001,
+    "edge_per_downside": null,
+    "kelly_signal": 0.008699170544203938,
+    "is_true_arbitrage": false,
+    "actual_costs": 14.203500000000004,
+    "min_payoff_after_costs": -364.2035,
+    "penalties": {
+      "vega": 0.0,
+      "funding": 0,
+      "liquidity": 5.950000000000003,
+      "total": 5.950000000000003
+    },
+    "sharpe_ratio": null,
+    "kelly_fraction": 0.0,
+    "filter_code": "DROP_DOWNSIDE_TOO_LARGE"
+  },
+  "risk_penalties": {
+    "vega": 0.0,
+    "funding": 0,
+    "liquidity": 5.950000000000003,
+    "total": 5.950000000000003
+  },
+  "rank": 1,
+  "quality_tier": "SPECULATIVE"
+}

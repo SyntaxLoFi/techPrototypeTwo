@@ -78,6 +78,8 @@ class OptionHedgeBuilder:
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         # Write one consumer-side checkpoint only (single JSON per run)
         self._consumer_checkpoint_written = False
+        # Store unfiltered opportunities if configured
+        self.unfiltered_opportunities = []
 
     # ----- public API -----
     def build(self, _market_snapshot: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:
@@ -409,6 +411,17 @@ class OptionHedgeBuilder:
                                    "has_metrics": sum(1 for o in opportunities if "metrics" in o)})
             except Exception as e:
                 self.logger.warning("ProbabilityRanker failed (%s); continuing without ranking", e)
+            
+            # Save unfiltered opportunities if configured
+            try:
+                config = get_config()
+                if config and hasattr(config, 'data') and config.data.save_unfiltered_opportunities:
+                    # Store unfiltered opportunities to be saved later by the writer
+                    self.unfiltered_opportunities = list(opportunities)
+                    self.logger.info("Captured %d unfiltered opportunities for saving", len(self.unfiltered_opportunities))
+            except Exception as e:
+                self.logger.debug("Failed to capture unfiltered opportunities: %s", e)
+            
             # Checkpoint: Before EV filter
             pre_ev_count = len(opportunities)
             debugger.checkpoint("pre_ev_filter", opportunities,

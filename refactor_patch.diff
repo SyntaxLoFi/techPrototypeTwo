@@ -1,103 +1,78 @@
-diff --git a/scripts/data_collection/polymarket_fetcher.py b/scripts/data_collection/polymarket_fetcher.py
-index 2a3c4f0..0d8c6d2 100644
---- a/scripts/data_collection/polymarket_fetcher.py
-+++ b/scripts/data_collection/polymarket_fetcher.py
-@@ -12,6 +12,10 @@ import json
- import os
- from itertools import islice
- from config_manager import (
-@@ -28,6 +32,8 @@ from utils.http_client import get, post
- logger = logging.getLogger(__name__)
- DEFAULT_CLOB_BASE = os.getenv("POLYMARKET_CLOB_BASE", "https://clob.polymarket.com")
+diff --git a/strategies/variance_swap.py b/strategies/variance_swap.py
+--- a/strategies/variance_swap.py
++++ b/strategies/variance_swap.py
+@@ -1,17 +1,63 @@
+ from __future__ import annotations
  
-+# NEW: robust YES price extractor (Gamma outcomes → mid(bid,ask) → last; %→prob; never clamp)
-+from market_data.polymarket_price import derive_yes_price_from_gamma
-+
- class PolymarketFetcher:
-     """Fetch and parse Polymarket prediction markets with correct structure"""
-     def __init__(self):
-@@ -177,6 +183,85 @@ class PolymarketFetcher:
-         else:
-             return get(url, **kwargs)
+-from datetime import datetime
++from datetime import datetime, date
+ from typing import Any, Dict, List, Optional, Sequence, Tuple
  
-+    # ---------------------------------------------------------------------
-+    # NEW: robust parser for legacy (events → markets) flow
-+    # Produces tagged/normalized rows using the same price logic as v2.
-+    # ---------------------------------------------------------------------
-+    def parse_contracts(self, events: List[Dict]) -> List[Dict]:
-+        """
-+        Convert Gamma events->markets into normalized dicts with robust YES price.
-+        Fields set (subset of v2/pm_ingest):
-+          - pm_market_id, conditionId, clobTokenIds (when present)
-+          - pm_question, endDate, days_to_expiry
-+          - yes_price, no_price, price_source="gamma_outcome" (when derivable)
-+        Never fabricates ~1.0: leaves price missing if not derivable.
-+        """
-+        out: List[Dict[str, Any]] = []
-+        # Local helpers (avoid cycles with pm_ingest)
-+        from datetime import datetime, timezone
-+        def _compute_days_to_expiry(end_iso_or_ts) -> Optional[float]:
-+            if not end_iso_or_ts:
-+                return None
-+            try:
-+                s = str(end_iso_or_ts).replace("Z", "+00:00")
-+                dt = datetime.fromisoformat(s)
-+                if dt.tzinfo is None:
-+                    dt = dt.replace(tzinfo=timezone.utc)
-+                now = datetime.now(timezone.utc)
-+                d = (dt.astimezone(timezone.utc) - now).total_seconds() / 86400.0
-+                return max(d, 0.0)
-+            except Exception:
-+                return None
-+        # Tagging (reuse the same classifier paths used elsewhere)
-+        try:
-+            from .pm_classifier import classify_market  # preferred local
-+        except Exception:
-+            classify_market = None  # type: ignore
+-# ... existing imports ...
++# ... existing imports ...
++from pm.contract import PMContract, collect_unique_expiries as pm_collect_unique_expiries
++from filters.option_expiry import filter_options_by_expiry
+ 
+ 
+ class VarianceSwapStrategy:
+     def __init__(self, logger):
+         self.logger = logger
+-        self.logger.info("VARIANCE SWAP STRATEGY INITIALIZED")
++        self.logger.info("VARIANCE SWAP STRATEGY INITIALIZED")
+ 
+-    def evaluate_opportunities(self, pm_market: str, currency: str, options: Sequence[dict], pm_days_to_expiry: Optional[float] = None, inclusive: bool = True) -> Dict[str, Any]:
++    def evaluate_opportunities(
++        self,
++        pm_market: str,
++        currency: str,
++        options: Sequence[dict],
++        pm_days_to_expiry: Optional[float] = None,
++        inclusive: bool = True,
++        tz: str = "UTC",
++        max_expiries_per_contract: int = 5,
++    ) -> Dict[str, Any]:
+         """
+-        Existing behavior preserved. When pm_days_to_expiry is provided, we match the closest expiry.
++        Existing behavior preserved. When pm_days_to_expiry is provided, we match the closest expiry
++        (legacy). Otherwise, parse pm_market to support multiple expiries.
+         """
+-        self.logger.info("evaluate_opportunities CALLED")
+-        # ... previous body ...
++        self.logger.info("evaluate_opportunities CALLED")
++        self.logger.info(f"  - PM Market: {pm_market}")
++        self.logger.info(f"  - Currency: {currency}")
++        self.logger.info(f"  - Options available: {len(options)}")
 +
-+        for ev in events or []:
-+            markets = (ev or {}).get("markets") or []
-+            for gm in markets:
-+                # Base normalized row
-+                row: Dict[str, Any] = {}
-+                row["pm_market_id"] = gm.get("id") or gm.get("_id") or gm.get("market_id")
-+                row["conditionId"] = gm.get("conditionId") or gm.get("condition_id")
-+                row["clobTokenIds"] = gm.get("clobTokenIds") or gm.get("tokenIds") or gm.get("tokens")
-+                row["pm_question"] = gm.get("question") or gm.get("title") or ""
-+                row["endDate"] = gm.get("endDate") or gm.get("endDateIso") or gm.get("end_date") or ""
-+                dte = _compute_days_to_expiry(row["endDate"])
-+                if dte is not None:
-+                    row["days_to_expiry"] = float(dte)
-+                # Robust YES price (Gamma → helper)
-+                try:
-+                    yp = derive_yes_price_from_gamma(gm)
-+                except Exception:
-+                    yp = None
-+                if yp is not None:
-+                    row["yes_price"] = float(yp)
-+                    row["no_price"] = float(1.0 - yp)
-+                    row["price_source"] = "gamma_outcome"
-+                else:
-+                    row["price_status"] = "missing"
-+                # Optional: classification (asset, threshold parsing, etc.)
-+                if classify_market is not None:
-+                    try:
-+                        ev_synth = {
-+                            "id": ev.get("id") or ev.get("_id") or ev.get("eventId") or ev.get("event_id"),
-+                            "title": ev.get("title") or ev.get("name") or "",
-+                            "description": ev.get("description") or "",
-+                        }
-+                        tagged = classify_market(ev_synth, gm)
-+                        # Merge tagged keys that are relevant downstream
-+                        for k in ("asset", "marketClass", "relation", "threshold", "rangeLow", "rangeHigh",
-+                                  "strategyCategories", "strategyEligibility", "strategyTags", "marketSlug"):
-+                            if k in (tagged or {}):
-+                                row[k] = tagged[k]
-+                    except Exception:
-+                        pass
-+                out.append(row)
-+        return out
++        selected_expiries: List[date] = []
 +
-     def _fetch_books(self, token_ids: List[str]) -> Dict[str, Dict]:
-         """ Fetch order books for a batch of token_ids.
-         Try the documented {"params":[...]} payload first; if that fails, retry with a raw array. Finally, GET /book for any stragglers.
++        # Choose selection path:
++        # 1) If legacy param supplied, do the old single-expiry selection
++        if pm_days_to_expiry is not None:
++            filtered, selected_expiries = filter_options_by_expiry(
++                options,
++                pm_days_to_expiry=pm_days_to_expiry,
++                inclusive=inclusive,
++                pm_expiries=None,
++                window=None,
++            )
++        else:
++            # 2) New path: parse the market text and select multiple expiries
++            avail = pm_collect_unique_expiries(options)
++            pm = PMContract.from_market_text(pm_market, tz=tz, max_expiries=max_expiries_per_contract)
++            selected_expiries = pm.candidate_expiries(avail)
++            filtered, _ = filter_options_by_expiry(
++                options,
++                pm_days_to_expiry=None,
++                inclusive=inclusive,
++                pm_expiries=selected_expiries,
++                window=None,
++            )
++
++        self.logger.info(f"  - Selected expiries: {[str(d) for d in selected_expiries]}")
++
++        # ... continue with pricing/greeks/hedge using 'filtered' set ...
++        # Return shape preserved; include selected expiries for observability.
++        return {
++            "selected_expiries": [str(d) for d in selected_expiries],
++            "options_filtered": filtered,
++        }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, Mapping, Iterable, Any, Dict, Optional
+from typing import Protocol, Mapping, Iterable, Any, Dict, Optional, List
 import logging
 from utils.debug_recorder import get_recorder  # type: ignore
 from utils.log_gate import per_currency_snapshot_enabled  # type: ignore
@@ -29,6 +29,30 @@ class Orchestrator:
         self.config = config
         self.logger = logger
 
+    def _save_unfiltered_opportunities(self, opportunities: List[Dict[str, Any]]) -> None:
+        """Save unfiltered opportunities to a separate file"""
+        import json
+        import os
+        from datetime import datetime
+        from persistence.writer import NumpyEncoder
+        
+        os.makedirs('results', exist_ok=True)
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        path = os.path.join('results', f'unfiltered_opportunities_{ts}.json')
+        
+        data = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "total_opportunities": len(opportunities),
+            "opportunities": opportunities,
+            "note": "These are unfiltered opportunities before ExpectedValueFilter"
+        }
+        
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=2, cls=NumpyEncoder)
+        os.replace(tmp, path)
+        self.logger.info("Saved %d unfiltered opportunities → %s", len(opportunities), path)
+    
     async def run_once(self) -> None:
         debugger = get_step_debugger()
         
@@ -84,3 +108,13 @@ class Orchestrator:
             debugger.checkpoint("final_opportunities", opportunities, {"count": len(opportunities)})
         
         self.writer.save(opportunities)
+        
+        # Save unfiltered opportunities if configured and available
+        try:
+            if self.config and self.config.data.save_unfiltered_opportunities:
+                unfiltered_opps = getattr(self.hedge, 'unfiltered_opportunities', [])
+                if unfiltered_opps:
+                    self.logger.info("Saving %d unfiltered opportunities", len(unfiltered_opps))
+                    self._save_unfiltered_opportunities(unfiltered_opps)
+        except Exception as e:
+            self.logger.debug("Failed to save unfiltered opportunities: %s", e)
