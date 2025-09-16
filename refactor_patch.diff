@@ -1,53 +1,103 @@
-diff --git a/market_data/polymarket_gamma.py b/market_data/polymarket_gamma.py
-index abc1234..def5678 100644
---- a/market_data/polymarket_gamma.py
-+++ b/market_data/polymarket_gamma.py
-@@ -1,6 +1,8 @@
- # -*- coding: utf-8 -*-
--from typing import Dict, Any, Optional
-+from typing import Dict, Any, Optional
-+
-+# Core pricing helper (robust outcome/quotes parsing; never default to ~1.0)
+diff --git a/scripts/data_collection/polymarket_fetcher.py b/scripts/data_collection/polymarket_fetcher.py
+index 2a3c4f0..0d8c6d2 100644
+--- a/scripts/data_collection/polymarket_fetcher.py
++++ b/scripts/data_collection/polymarket_fetcher.py
+@@ -12,6 +12,10 @@ import json
+ import os
+ from itertools import islice
+ from config_manager import (
+@@ -28,6 +32,8 @@ from utils.http_client import get, post
+ logger = logging.getLogger(__name__)
+ DEFAULT_CLOB_BASE = os.getenv("POLYMARKET_CLOB_BASE", "https://clob.polymarket.com")
+ 
++# NEW: robust YES price extractor (Gamma outcomes → mid(bid,ask) → last; %→prob; never clamp)
 +from market_data.polymarket_price import derive_yes_price_from_gamma
++
+ class PolymarketFetcher:
+     """Fetch and parse Polymarket prediction markets with correct structure"""
+     def __init__(self):
+@@ -177,6 +183,85 @@ class PolymarketFetcher:
+         else:
+             return get(url, **kwargs)
  
- 
- def normalize_gamma_market(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-@@ -15,31 +17,44 @@ def normalize_gamma_market(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-     out: Dict[str, Any] = {
-         "pm_market_id": market.get("id") or market.get("marketId"),
-         "title": market.get("question") or market.get("title"),
--        # prices filled below
-+        # prices filled below (via robust core helper)
-         "source": "polymarket",
-     }
- 
--    # Previous path: assume outcomePrices is a list and [0] is YES, [1] is NO,
--    # falling back to a near-1.0 clamp when missing. This caused 0.999 artifacts.
--    ops = market.get("outcomePrices") or []
--    outs = market.get("outcomes") or []
--    yes_price: Optional[float] = None
--    try:
--        if isinstance(ops, list) and len(ops) >= 2:
--            # Naively assume index mapping
--            yes_price = float(ops[0])
--    except Exception:
--        yes_price = None
-+    # Core path: derive YES via outcomes→mid(bid,ask)→last, with %→prob normalization
-+    yes_price: Optional[float] = derive_yes_price_from_gamma(market)
- 
--    if yes_price is None:
--        # DO NOT fabricate near-certainty. Mark missing and continue.
--        out["yes_price"] = None
--        out["no_price"] = None
--        out["price_status"] = "missing"
--    else:
--        out["yes_price"] = yes_price
--        out["no_price"] = 1.0 - yes_price
--        out["price_status"] = "ok"
-+    # Never fabricate; surface truthfully
-+    out["yes_price"] = yes_price
-+    out["no_price"] = (1.0 - yes_price) if yes_price is not None else None
-+    out["price_status"] = "ok" if yes_price is not None else "missing"
- 
-     # ... any remaining normalization (timestamps, ticker, etc.) stays the same
-     return out
++    # ---------------------------------------------------------------------
++    # NEW: robust parser for legacy (events → markets) flow
++    # Produces tagged/normalized rows using the same price logic as v2.
++    # ---------------------------------------------------------------------
++    def parse_contracts(self, events: List[Dict]) -> List[Dict]:
++        """
++        Convert Gamma events->markets into normalized dicts with robust YES price.
++        Fields set (subset of v2/pm_ingest):
++          - pm_market_id, conditionId, clobTokenIds (when present)
++          - pm_question, endDate, days_to_expiry
++          - yes_price, no_price, price_source="gamma_outcome" (when derivable)
++        Never fabricates ~1.0: leaves price missing if not derivable.
++        """
++        out: List[Dict[str, Any]] = []
++        # Local helpers (avoid cycles with pm_ingest)
++        from datetime import datetime, timezone
++        def _compute_days_to_expiry(end_iso_or_ts) -> Optional[float]:
++            if not end_iso_or_ts:
++                return None
++            try:
++                s = str(end_iso_or_ts).replace("Z", "+00:00")
++                dt = datetime.fromisoformat(s)
++                if dt.tzinfo is None:
++                    dt = dt.replace(tzinfo=timezone.utc)
++                now = datetime.now(timezone.utc)
++                d = (dt.astimezone(timezone.utc) - now).total_seconds() / 86400.0
++                return max(d, 0.0)
++            except Exception:
++                return None
++        # Tagging (reuse the same classifier paths used elsewhere)
++        try:
++            from .pm_classifier import classify_market  # preferred local
++        except Exception:
++            classify_market = None  # type: ignore
++
++        for ev in events or []:
++            markets = (ev or {}).get("markets") or []
++            for gm in markets:
++                # Base normalized row
++                row: Dict[str, Any] = {}
++                row["pm_market_id"] = gm.get("id") or gm.get("_id") or gm.get("market_id")
++                row["conditionId"] = gm.get("conditionId") or gm.get("condition_id")
++                row["clobTokenIds"] = gm.get("clobTokenIds") or gm.get("tokenIds") or gm.get("tokens")
++                row["pm_question"] = gm.get("question") or gm.get("title") or ""
++                row["endDate"] = gm.get("endDate") or gm.get("endDateIso") or gm.get("end_date") or ""
++                dte = _compute_days_to_expiry(row["endDate"])
++                if dte is not None:
++                    row["days_to_expiry"] = float(dte)
++                # Robust YES price (Gamma → helper)
++                try:
++                    yp = derive_yes_price_from_gamma(gm)
++                except Exception:
++                    yp = None
++                if yp is not None:
++                    row["yes_price"] = float(yp)
++                    row["no_price"] = float(1.0 - yp)
++                    row["price_source"] = "gamma_outcome"
++                else:
++                    row["price_status"] = "missing"
++                # Optional: classification (asset, threshold parsing, etc.)
++                if classify_market is not None:
++                    try:
++                        ev_synth = {
++                            "id": ev.get("id") or ev.get("_id") or ev.get("eventId") or ev.get("event_id"),
++                            "title": ev.get("title") or ev.get("name") or "",
++                            "description": ev.get("description") or "",
++                        }
++                        tagged = classify_market(ev_synth, gm)
++                        # Merge tagged keys that are relevant downstream
++                        for k in ("asset", "marketClass", "relation", "threshold", "rangeLow", "rangeHigh",
++                                  "strategyCategories", "strategyEligibility", "strategyTags", "marketSlug"):
++                            if k in (tagged or {}):
++                                row[k] = tagged[k]
++                    except Exception:
++                        pass
++                out.append(row)
++        return out
++
+     def _fetch_books(self, token_ids: List[str]) -> Dict[str, Dict]:
+         """ Fetch order books for a batch of token_ids.
+         Try the documented {"params":[...]} payload first; if that fails, retry with a raw array. Finally, GET /book for any stragglers.

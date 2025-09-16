@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CLOB_BASE = os.getenv("POLYMARKET_CLOB_BASE", "https://clob.polymarket.com")
 
+# NEW: robust YES price extractor (Gamma outcomes → mid(bid,ask) → last; %→prob; never clamp)
+from market_data.polymarket_price import derive_yes_price_from_gamma
+
 
 class PolymarketFetcher:
     """Fetch and parse Polymarket prediction markets with correct structure"""
@@ -357,6 +360,84 @@ class PolymarketFetcher:
             return post(url, **kwargs)
         else:
             return get(url, **kwargs)
+
+    # ---------------------------------------------------------------------
+    # NEW: robust parser for legacy (events → markets) flow
+    # Produces tagged/normalized rows using the same price logic as v2.
+    # ---------------------------------------------------------------------
+    def parse_contracts(self, events: List[Dict]) -> List[Dict]:
+        """
+        Convert Gamma events->markets into normalized dicts with robust YES price.
+        Fields set (subset of v2/pm_ingest):
+          - pm_market_id, conditionId, clobTokenIds (when present)
+          - pm_question, endDate, days_to_expiry
+          - yes_price, no_price, price_source="gamma_outcome" (when derivable)
+        Never fabricates ~1.0: leaves price missing if not derivable.
+        """
+        out: List[Dict[str, Any]] = []
+        # Local helpers (avoid cycles with pm_ingest)
+        from datetime import datetime, timezone
+        def _compute_days_to_expiry(end_iso_or_ts) -> Optional[float]:
+            if not end_iso_or_ts:
+                return None
+            try:
+                s = str(end_iso_or_ts).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                d = (dt.astimezone(timezone.utc) - now).total_seconds() / 86400.0
+                return max(d, 0.0)
+            except Exception:
+                return None
+        # Tagging (reuse the same classifier paths used elsewhere)
+        try:
+            from .pm_classifier import classify_market  # preferred local
+        except Exception:
+            classify_market = None  # type: ignore
+
+        for ev in events or []:
+            markets = (ev or {}).get("markets") or []
+            for gm in markets:
+                # Base normalized row
+                row: Dict[str, Any] = {}
+                row["pm_market_id"] = gm.get("id") or gm.get("_id") or gm.get("market_id")
+                row["conditionId"] = gm.get("conditionId") or gm.get("condition_id")
+                row["clobTokenIds"] = gm.get("clobTokenIds") or gm.get("tokenIds") or gm.get("tokens")
+                row["pm_question"] = gm.get("question") or gm.get("title") or ""
+                row["endDate"] = gm.get("endDate") or gm.get("endDateIso") or gm.get("end_date") or ""
+                dte = _compute_days_to_expiry(row["endDate"])
+                if dte is not None:
+                    row["days_to_expiry"] = float(dte)
+                # Robust YES price (Gamma → helper)
+                try:
+                    yp = derive_yes_price_from_gamma(gm)
+                except Exception:
+                    yp = None
+                if yp is not None:
+                    row["yes_price"] = float(yp)
+                    row["no_price"] = float(1.0 - yp)
+                    row["price_source"] = "gamma_outcome"
+                else:
+                    row["price_status"] = "missing"
+                # Optional: classification (asset, threshold parsing, etc.)
+                if classify_market is not None:
+                    try:
+                        ev_synth = {
+                            "id": ev.get("id") or ev.get("_id") or ev.get("eventId") or ev.get("event_id"),
+                            "title": ev.get("title") or ev.get("name") or "",
+                            "description": ev.get("description") or "",
+                        }
+                        tagged = classify_market(ev_synth, gm)
+                        # Merge tagged keys that are relevant downstream
+                        for k in ("asset", "marketClass", "relation", "threshold", "rangeLow", "rangeHigh",
+                                  "strategyCategories", "strategyEligibility", "strategyTags", "marketSlug"):
+                            if k in (tagged or {}):
+                                row[k] = tagged[k]
+                    except Exception:
+                        pass
+                out.append(row)
+        return out
 
     def _fetch_books(self, token_ids: List[str]) -> Dict[str, Dict]:
         """

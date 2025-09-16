@@ -176,6 +176,29 @@ def build_scanners(logger: Optional[logging.Logger] = None, *, recorder=None) ->
                 except Exception:
                     pass
 
+        # --- NEW: Final robust backfill for YES/NO prices on any path ---
+        try:
+            from market_data.polymarket_price import derive_yes_price_from_gamma
+        except Exception:
+            derive_yes_price_from_gamma = None  # type: ignore
+        if derive_yes_price_from_gamma is not None:
+            fixed = 0
+            for mm in markets or []:
+                try:
+                    # If a prior step (pm_ingest / v2 fetcher) already stamped Gamma prices,
+                    # do NOT overwrite them.
+                    if mm.get("yes_price") is None:
+                        yp = derive_yes_price_from_gamma(mm if isinstance(mm, dict) else {})
+                        if yp is not None:
+                            mm["yes_price"] = float(yp)
+                            mm["no_price"] = float(1.0 - yp)
+                            mm.setdefault("price_source", "gamma_outcome")
+                            fixed += 1
+                except Exception:
+                    # Leave missing rather than fabricate ~1.0
+                    mm.setdefault("price_status", "missing")
+            logger.info("Backfilled robust YES prices on %d markets", fixed)
+
         # Debug dump + summary log for whichever path succeeded
         try:
             rec = recorder or get_recorder()
