@@ -1,57 +1,53 @@
-*** Begin Patch
-*** Update File: market_data/polymarket_gamma.py
-@@
--def fetch_markets_from_gamma(url: str = "https://gamma-api.polymarket.com/markets",
--                             fetcher=None) -> List[Dict[str, Any]]:
-+def fetch_markets_from_gamma(url: str = "https://gamma-api.polymarket.com/markets",
-+                             fetcher=None,
-+                             query: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-@@
--    if fetcher is None:
-+    if fetcher is None:
-         if requests is None:
-             raise RuntimeError("requests not available; install requirements first.")
--        resp = requests.get(url, timeout=30)
-+        # Default to only live (open) markets at the HTTP layer
-+        params = {"closed": "false"}
-+        if query:
-+            params.update(query)
-+        resp = requests.get(url, params=params, timeout=30)
-         resp.raise_for_status()
-         return resp.json()
-     else:
--        resp = fetcher(url)
-+        # Test hook: fetcher can ignore 'query' or consume it
-+        resp = fetcher(url) if query is None else fetcher(url, query)
-         return resp.json() if hasattr(resp, "json") else resp
+diff --git a/market_data/polymarket_gamma.py b/market_data/polymarket_gamma.py
+index abc1234..def5678 100644
+--- a/market_data/polymarket_gamma.py
++++ b/market_data/polymarket_gamma.py
+@@ -1,6 +1,8 @@
+ # -*- coding: utf-8 -*-
+-from typing import Dict, Any, Optional
++from typing import Dict, Any, Optional
 +
-+def _is_live_market(gm: Dict[str, Any]) -> bool:
-+    # Live = not closed, active true, not archived
-+    if gm.get("closed") is True:
-+        return False
-+    if gm.get("archived") is True:
-+        return False
-+    return gm.get("active") is True
-@@
--def load_polymarket_gamma_normalized(now: Optional[datetime]=None,
--                                     url: str="https://gamma-api.polymarket.com/markets") -> List[Dict[str, Any]]:
--    raw = fetch_markets_from_gamma(url=url)
-+def load_polymarket_gamma_normalized(now: Optional[datetime]=None,
-+                                     url: str="https://gamma-api.polymarket.com/markets",
-+                                     fetcher=None,
-+                                     live_only: bool = True) -> List[Dict[str, Any]]:
-+    # Query only open markets at the API level; we also post-filter for active/archived.
-+    raw = fetch_markets_from_gamma(url=url, fetcher=fetcher, query={"closed": "false"} if live_only else None)
-     out: List[Dict[str, Any]] = []
--    for gm in raw:
-+    for gm in raw:
-+        if live_only and not _is_live_market(gm):
-+            _health_log(os.getenv("PM_HEALTH_DEBUG", "0") == "1",
-+                        "SKIP_NOT_LIVE",
-+                        {"id": gm.get("id"), "active": gm.get("active"), "closed": gm.get("closed"), "archived": gm.get("archived")})
-+            continue
-         m = normalize_gamma_market(gm, now=now)
-         if m is not None:
-             out.append(m)
++# Core pricing helper (robust outcome/quotes parsing; never default to ~1.0)
++from market_data.polymarket_price import derive_yes_price_from_gamma
+ 
+ 
+ def normalize_gamma_market(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+@@ -15,31 +17,44 @@ def normalize_gamma_market(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+     out: Dict[str, Any] = {
+         "pm_market_id": market.get("id") or market.get("marketId"),
+         "title": market.get("question") or market.get("title"),
+-        # prices filled below
++        # prices filled below (via robust core helper)
+         "source": "polymarket",
+     }
+ 
+-    # Previous path: assume outcomePrices is a list and [0] is YES, [1] is NO,
+-    # falling back to a near-1.0 clamp when missing. This caused 0.999 artifacts.
+-    ops = market.get("outcomePrices") or []
+-    outs = market.get("outcomes") or []
+-    yes_price: Optional[float] = None
+-    try:
+-        if isinstance(ops, list) and len(ops) >= 2:
+-            # Naively assume index mapping
+-            yes_price = float(ops[0])
+-    except Exception:
+-        yes_price = None
++    # Core path: derive YES via outcomes→mid(bid,ask)→last, with %→prob normalization
++    yes_price: Optional[float] = derive_yes_price_from_gamma(market)
+ 
+-    if yes_price is None:
+-        # DO NOT fabricate near-certainty. Mark missing and continue.
+-        out["yes_price"] = None
+-        out["no_price"] = None
+-        out["price_status"] = "missing"
+-    else:
+-        out["yes_price"] = yes_price
+-        out["no_price"] = 1.0 - yes_price
+-        out["price_status"] = "ok"
++    # Never fabricate; surface truthfully
++    out["yes_price"] = yes_price
++    out["no_price"] = (1.0 - yes_price) if yes_price is not None else None
++    out["price_status"] = "ok" if yes_price is not None else "missing"
+ 
+     # ... any remaining normalization (timestamps, ticker, etc.) stays the same
      return out
-*** End Patch

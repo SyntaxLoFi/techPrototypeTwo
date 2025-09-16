@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from typing import Optional
 import os
 from typing import List, Dict, Any
-from market_data.polymarket_gamma import load_polymarket_gamma_normalized
+from market_data.polymarket_gamma import normalize_gamma_market
+from market_data.polymarket_price import derive_yes_price_from_gamma
 import json
 
 try:
@@ -67,6 +68,26 @@ def tag_from_local_markets(markets: Iterable[dict]) -> List[dict]:
             continue
         out.append(classify_market(event, m))
     return out
+
+
+def load_polymarket_gamma_normalized() -> List[Dict[str, Any]]:
+    """
+    Load markets from Polymarket Gamma API and normalize them.
+    """
+    try:
+        from .polymarket_client import PolymarketClient
+        client = PolymarketClient()
+        
+        normalized_markets = []
+        for market in client.iter_markets(include_closed=False):
+            normalized = normalize_gamma_market(market)
+            if normalized:
+                normalized_markets.append(normalized)
+        
+        return normalized_markets
+    except Exception as e:
+        logging.error(f"Error loading Polymarket gamma data: {e}")
+        return []
 
 
 def load_polymarket_markets(*args, **kwargs) -> List[Dict[str, Any]]:
@@ -122,20 +143,12 @@ def fetch_and_tag_live(client: "PolymarketClient", *, limit_per_page: int = 250,
         dte = compute_days_to_expiry(m_out.get("endDate"))
         if dte is not None:
             m_out["days_to_expiry"] = float(dte)
-        # ---- Preferred prices from Gamma outcomePrices ----
-        try:
-            ops = gm.get("outcomePrices") or []
-            outs = gm.get("outcomes") or []
-            # Map common YES/NO ordering; be conservative if shapes mismatch
-            if isinstance(ops, list) and len(ops) >= 2:
-                # assume outcomes[0] ↔ YES, outcomes[1] ↔ NO when labeled, else treat [0]=YES,[1]=NO
-                yes_idx = 0
-                no_idx  = 1 if len(ops) > 1 else 0
-                m_out.setdefault("yes_price", float(ops[yes_idx]))
-                m_out.setdefault("no_price",  float(ops[no_idx]))
-                m_out["price_source"] = "gamma_outcome"
-        except Exception:
-            pass
+        # ---- Preferred prices from Gamma outcomePrices (robust) ----
+        yes = derive_yes_price_from_gamma(gm)
+        if yes is not None:
+            m_out["yes_price"] = float(yes)
+            m_out["no_price"]  = float(1.0 - yes)
+            m_out["price_source"] = "gamma_outcome"
         tagged.append(m_out)
     logger.info("fetch_and_tag_live: scanned %d markets, tagged %d", count, len(tagged))
     return tagged
