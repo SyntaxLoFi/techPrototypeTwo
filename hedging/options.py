@@ -6,6 +6,9 @@ import logging
 from dataclasses import dataclass
 from strategies.tag_router import StrategyTagRouter
 from digital_hedge_builder import build_digital_vertical_at_K
+from datetime import datetime, date, timezone
+from copy import deepcopy
+from core.expiry_window import enumerate_expiries, pm_date_to_default_cutoff_utc
 try:
     from config_manager import RISK_FREE_RATE, get_config  # type: ignore
 except Exception:  # pragma: no cover
@@ -78,8 +81,8 @@ class OptionHedgeBuilder:
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         # Write one consumer-side checkpoint only (single JSON per run)
         self._consumer_checkpoint_written = False
-        # Store unfiltered opportunities if configured
-        self.unfiltered_opportunities = []
+        # Exposed for Orchestrator to write unfiltered_opportunities_*.json
+        self.unfiltered_opportunities: List[Dict[str, Any]] = []
 
     # ----- public API -----
     def build(self, _market_snapshot: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:
@@ -95,8 +98,7 @@ class OptionHedgeBuilder:
                 if not self._pm_has_liquidity(contract):
                     continue
 
-                # ---- Strategy routing by tags (options.XXX) ----
-                # Build instrument universe once per contract
+                # ---- Build instrument universe once per contract ----
                 hedge_instruments: Dict[str, Any] = {}
                 oc = scanner.get('options_collector')
                 if scanner.get('has_options') and oc:
@@ -205,21 +207,132 @@ class OptionHedgeBuilder:
                     strategy_instances = []
 
                 produced_by_strategy = False
+
+                # -------- NEW: canonical PM settlement timestamp (date-only → 23:59:59Z) --------
+                def _parse_pm_settlement_ts(pm: Dict[str, Any]) -> Optional[datetime]:
+                    # Prefer explicit timestamp if present
+                    for k in ("end_date", "endDate"):
+                        v = pm.get(k)
+                        if v:
+                            try:
+                                ts = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                                return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+                            except Exception:
+                                pass
+                    # Fallback: date-only field
+                    d = pm.get("polymarket_date") or pm.get("pm_date") or pm.get("date")
+                    if isinstance(d, date) and not isinstance(d, datetime):
+                        return pm_date_to_default_cutoff_utc(d)
+                    if isinstance(d, str) and len(d) >= 10:
+                        try:
+                            y, m, dd = int(d[0:4]), int(d[5:7]), int(d[8:10])
+                            return pm_date_to_default_cutoff_utc(date(y, m, dd))
+                        except Exception:
+                            pass
+                    return None
+
+                pm_ts = _parse_pm_settlement_ts(contract)
+                # If PM ts is unknown, we cannot compute DTE accurately; still run (enumerator will keep >=0h default if ts exists)
+                all_options = hedge_instruments.get("options") or []
+                # Build policy_cfg from config (mirrors core defaults with your variance overrides)
+                try:
+                    cfg = get_config()
+                    hedging = getattr(cfg, "hedging", None)
+                    varcfg = getattr(hedging, "variance", None)
+                    policy_cfg = dict(
+                        expiry_policy=getattr(varcfg, "expiry_policy", "allow_far_with_unwind"),
+                        max_expiry_gap_days=getattr(varcfg, "max_expiry_gap_days", 60),
+                        max_expiries_considered=getattr(varcfg, "max_expiries_considered", 10),
+                        min_quotes_per_expiry=getattr(varcfg, "min_quotes_per_expiry", 2),
+                        min_strikes_required=getattr(varcfg, "min_strikes_required", 6),
+                    )
+                except Exception:
+                    policy_cfg = dict(
+                        expiry_policy="allow_far_with_unwind",
+                        max_expiry_gap_days=60,
+                        max_expiries_considered=10,
+                        min_quotes_per_expiry=2,
+                        min_strikes_required=6,
+                    )
+
+                # Enumerate expiries (if pm_ts is known). If unknown, treat as single-bucket (no per-expiry split).
+                candidates = enumerate_expiries(pm_ts, all_options, policy_cfg=policy_cfg) if pm_ts else []
+                try:
+                    debugger.checkpoint("expiry_candidates_for_contract", {
+                        "contract": (contract.get("question") or contract.get("id")),
+                        "pm_ts": pm_ts.isoformat() if pm_ts else None,
+                        "num_candidates": len(candidates),
+                        "candidates": [ {"expiry": c.date.isoformat(), "dte_hours": c.dte_hours, "quotes": c.quotes, "strikes": c.strikes} for c in candidates ],
+                    })
+                except Exception:
+                    pass
+
+                def _filter_to_expiry_date(options: List[dict], d: date) -> List[dict]:
+                    allowed = d.isoformat()
+                    out: List[dict] = []
+                    for o in options or []:
+                        e = o.get("expiry") or o.get("expiry_date") or o.get("expiration")
+                        dd = None
+                        if isinstance(e, str):
+                            dd = e[:10]
+                        elif isinstance(e, date) and not isinstance(e, datetime):
+                            dd = e.isoformat()
+                        elif isinstance(e, datetime):
+                            dd = e.date().isoformat()
+                        if dd == allowed:
+                            out.append(o)
+                    return out
+
+                # Helper: attach expiry metadata to every produced opportunity
+                def _attach_expiry_meta(opp: Dict[str, Any], cand) -> None:
+                    try:
+                        opp["option_expiry"] = cand.date.isoformat()
+                        opp["option_expiry_ts"] = cand.expiry_ts_utc.isoformat()
+                        opp["option_dte_days"] = float(cand.dte_hours) / 24.0
+                    except Exception:
+                        pass
+
                 if strategy_instances:
                     current_spot = float(scanner.get('current_spot') or 0.0)
                     for strat in strategy_instances:
-                        try:
-                            opps = strat.evaluate_opportunities(
-                                polymarket_contract=contract,
-                                hedge_instruments=hedge_instruments,
-                                current_spot=current_spot,
-                                position_size=position_size,
-                            ) or []
-                        except Exception as e:
-                            self.logger.debug("Strategy %s failed: %s", getattr(strat, "__class__", type(strat)).__name__, e)
-                            continue
+                        # Route through the shared enumerator: call the strategy once per expiry candidate.
+                        per_strat_opps: List[Dict[str, Any]] = []
+                        if candidates:
+                            for cand in candidates:
+                                hedg_exp = dict(hedge_instruments)
+                                hedg_exp["options"] = _filter_to_expiry_date(all_options, cand.date)
+                                if not hedg_exp["options"]:
+                                    continue
+                                try:
+                                    opps = strat.evaluate_opportunities(
+                                        polymarket_contract=contract,
+                                        hedge_instruments=hedg_exp,
+                                        current_spot=current_spot,
+                                        position_size=position_size,
+                                    ) or []
+                                except Exception as e:
+                                    self.logger.debug("Strategy %s failed at %s: %s",
+                                                      getattr(strat, "__class__", type(strat)).__name__,
+                                                      cand.date.isoformat(), e)
+                                    continue
+                                for opp in opps:
+                                    _attach_expiry_meta(opp, cand)
+                                    per_strat_opps.append(opp)
+                        else:
+                            # No pm_ts (or no candidates) → run once without per-expiry split
+                            try:
+                                opps = strat.evaluate_opportunities(
+                                    polymarket_contract=contract,
+                                    hedge_instruments=hedge_instruments,
+                                    current_spot=current_spot,
+                                    position_size=position_size,
+                                ) or []
+                            except Exception as e:
+                                self.logger.debug("Strategy %s failed: %s", getattr(strat, "__class__", type(strat)).__name__, e)
+                                opps = []
+                            per_strat_opps.extend(opps)
 
-                        for opp in opps:
+                        for opp in per_strat_opps:
                             # Standard metadata
                             opp.setdefault("currency", currency)
                             opp.setdefault("hedge_type", "options")
@@ -256,7 +369,6 @@ class OptionHedgeBuilder:
                             pmc = contract or {}
                             days = pmc.get("days_to_expiry")
                             if days is None:
-                                from datetime import datetime, timezone
                                 end = pmc.get("endDate") or pmc.get("end_date")
                                 if end:
                                     try:
@@ -274,7 +386,7 @@ class OptionHedgeBuilder:
                                 "days_to_expiry": days,
                             }
                             opportunities.append(opp)
-                            produced_by_strategy = True
+                    produced_by_strategy = True
 
                 if produced_by_strategy:
                     # Already produced opportunities via strategy routing; skip generic digital construction
@@ -367,7 +479,6 @@ class OptionHedgeBuilder:
                     # Derive days_to_expiry from endDate when missing
                     try:
                         if contract.get("endDate") and not contract.get("days_to_expiry"):
-                            from datetime import datetime, timezone
                             end_dt = datetime.fromisoformat(str(contract["endDate"]).replace("Z", "+00:00"))
                             days = max(0.0, (end_dt - datetime.now(timezone.utc)).total_seconds() / 86400.0)
                             contract["days_to_expiry"] = days
@@ -382,6 +493,14 @@ class OptionHedgeBuilder:
                             opp_i = dict(opp)
                             opp_i.update(ds)
                             opportunities.append(_finalize(opp_i))
+
+        # -------- Capture UNFILTERED opportunities BEFORE ranking/EV filter --------
+        try:
+            # Deep copy to freeze pre-filter view for the Orchestrator writer
+            self.unfiltered_opportunities = deepcopy(opportunities)
+        except Exception:
+            # Fallback: shallow copy is better than nothing
+            self.unfiltered_opportunities = list(opportunities)
 
         # Checkpoint: Raw hedge opportunities before ranking
         debugger.checkpoint("hedge_opportunities_raw", opportunities,
@@ -411,16 +530,6 @@ class OptionHedgeBuilder:
                                    "has_metrics": sum(1 for o in opportunities if "metrics" in o)})
             except Exception as e:
                 self.logger.warning("ProbabilityRanker failed (%s); continuing without ranking", e)
-            
-            # Save unfiltered opportunities if configured
-            try:
-                config = get_config()
-                if config and hasattr(config, 'data') and config.data.save_unfiltered_opportunities:
-                    # Store unfiltered opportunities to be saved later by the writer
-                    self.unfiltered_opportunities = list(opportunities)
-                    self.logger.info("Captured %d unfiltered opportunities for saving", len(self.unfiltered_opportunities))
-            except Exception as e:
-                self.logger.debug("Failed to capture unfiltered opportunities: %s", e)
             
             # Checkpoint: Before EV filter
             pre_ev_count = len(opportunities)
