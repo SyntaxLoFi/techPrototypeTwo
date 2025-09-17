@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 
@@ -35,6 +35,12 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _expiry_dt_utc(d: date, cutoff_hms: Tuple[int,int,int]=(23,59,59)) -> datetime:
+    """Map a date-only exchange expiry to a canonical settlement moment (UTC)."""
+    hh, mm, ss = cutoff_hms
+    return datetime(d.year, d.month, d.day, hh, mm, ss, tzinfo=timezone.utc)
+
+
 def _write_debug(debug_path: Optional[str], payload: dict) -> None:
     if not debug_path:
         return
@@ -62,7 +68,7 @@ def filter_options_by_expiry(
     New behaviors:
       - If 'pm_expiries' provided: include options whose expiry is in that set.
       - If 'window' provided: include options with start <= expiry <= end.
-      - Else (legacy): choose the single expiry whose DTE is closest to pm_days_to_expiry.
+      - Else (legacy): choose the single expiry whose *hour-level* DTE is closest to pm_days_to_expiry.
     Returns: (filtered_options, selected_expiries)
     """
     now = now or _now_utc()
@@ -70,6 +76,7 @@ def filter_options_by_expiry(
 
     selected: List[date] = []
     mode = "legacy_single"
+    distances: List[Tuple[str, float]] = []
     if pm_expiries:
         mode = "explicit_set"
         selected = sorted(set(pm_expiries))
@@ -80,20 +87,18 @@ def filter_options_by_expiry(
     else:
         # Legacy behavior: closest expiry to pm_days_to_expiry
         if pm_days_to_expiry is None:
-            # Fall back to "next available"
+            # Fall back to "next available" (earliest)
             selected = expiries_all[:1]
         else:
-            # Build target date and pick closest
-            target = (now.date())
-            # pm_days_to_expiry is a float in days; round to nearest minute for comparability
-            from datetime import timedelta
-            target_d = target
-            # Find the expiry whose (expiry - today).days is closest to pm_days_to_expiry
-            # (uses calendar-day distance; good enough for bucket selection)
-            def _dist(d: date) -> float:
-                return abs((d - target_d).days - pm_days_to_expiry)
-            chosen = sorted(expiries_all, key=_dist)[:1]
+            # Build hour-precise target and pick closest in hours
+            target_dt = now + timedelta(days=float(pm_days_to_expiry))
+            def _dist_hours(d: date) -> float:
+                d_dt = _expiry_dt_utc(d)
+                return abs((d_dt - now).total_seconds()/3600.0 - float(pm_days_to_expiry)*24.0)
+            chosen = sorted(expiries_all, key=_dist_hours)[:1]
             selected = chosen
+            # capture distances for debug
+            distances = [(str(d), _dist_hours(d)) for d in expiries_all]
 
     if max_expiries and len(selected) > max_expiries:
         selected = selected[:max_expiries]
@@ -103,13 +108,12 @@ def filter_options_by_expiry(
     # Debug trace (mirrors your existing JSONL for continuity)
     sample = []
     for i, o in enumerate(options[:3]):
-        sample.append(
-            {
-                "i": i,
-                "expiry": o.get("expiry"),
-                "dte": "N/A",  # keep shape identical to your current log
-            }
-        )
+        # compute sample DTE hours relative to now
+        od = _as_date(o.get("expiry"))
+        dte_h = None
+        if od:
+            dte_h = (_expiry_dt_utc(od) - now).total_seconds()/3600.0
+        sample.append({"i": i, "expiry": o.get("expiry"), "dte_hours": dte_h})
     _write_debug(
         debug_path,
         {
@@ -120,6 +124,7 @@ def filter_options_by_expiry(
             "inclusive": inclusive,
             "unique_expiries_found": len(expiries_all),
             "selected_expiries": [str(d) for d in selected],
+            "distances_hours": distances,
             "sample_options": sample,
         },
     )

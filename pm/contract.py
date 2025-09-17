@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 from .parsing import parse_market_expiry
+
+
+def _expiry_dt_utc(d: date) -> datetime:
+    return datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=timezone.utc)
 
 
 @dataclass
@@ -42,8 +46,8 @@ class PMContract:
         """
         Select a set of option expiries for this PM contract from the
         exchange's available expiries.
-        - range/window  -> all expiries within [start, end], optionally downsampled
-        - point/deadline -> K nearest expiries (bracketing the point)
+        - range/window -> all expiries within [start, end], optionally downsampled
+        - point/deadline -> K nearest expiries in *hours* (bracket the point)
         """
         uniq = sorted(set(available))
         if not uniq:
@@ -61,10 +65,12 @@ class PMContract:
 
         # point/deadline behavior
         if self.point is not None:
-            target = self.point.date()
+            target_dt = self.point
+            if target_dt.tzinfo is None:
+                target_dt = target_dt.replace(tzinfo=timezone.utc)
             k = max(2, self.max_expiries)  # at least bracket with 2 expiries if possible
-            # Sort by absolute distance in days
-            selected = sorted(uniq, key=lambda d: abs((d - target).days))[: k]
+            # Sort by absolute distance in hours (preserve time-of-day)
+            selected = sorted(uniq, key=lambda d: abs((_expiry_dt_utc(d) - target_dt).total_seconds()))[:k]
             return sorted(selected)
 
         # Fallback: just return up to max_expiries from available

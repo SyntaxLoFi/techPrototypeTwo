@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from scripts.data_collection.polymarket_client import PolymarketClient  # for CLOB books/prices
 import scripts.data_collection.pm_ingest as pm_ingest
+import strategies.options.expiry_layer  # auto-wires multi-expiry for all options strategies
 
 logger = logging.getLogger(__name__)
 try:

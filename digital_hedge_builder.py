@@ -1,5 +1,8 @@
 # digital_hedge_builder.py
 from typing import Dict, Any, List, Tuple, Optional
+from datetime import date, datetime, timezone
+from core.expiry_window import enumerate_expiries, pm_date_to_default_cutoff_utc
+from config_loader import load_config
 from math import isfinite
 
 # --- canonical option family helpers ---
@@ -45,6 +48,24 @@ def _bracket_strikes(strikes: List[float], K: float) -> Optional[tuple[float,flo
         if xs[i] <= K < xs[i+1]:
             return (xs[i], xs[i+1])
     return None
+
+def _filter_chain_by_expiry_candidates(options: List[dict], candidates) -> List[dict]:
+    if not candidates:
+        return options
+    allowed = {c.date.isoformat() for c in candidates}
+    out = []
+    for o in options:
+        exp = o.get("expiry")
+        d = None
+        if isinstance(exp, str):
+            d = exp[:10]
+        elif isinstance(exp, date):
+            d = exp.isoformat()
+        elif isinstance(exp, datetime):
+            d = exp.date().isoformat()
+        if d and d in allowed:
+            out.append(o)
+    return out
 
 def build_digital_vertical_at_K(
     *,
@@ -133,3 +154,30 @@ def build_digital_vertical_at_K(
         'has_exact_k': abs(k_lo - K) < 1e-9,
         'approximation_reason': None if abs(k_lo - K) < 1e-9 else 'no_exact_strike_at_K'
     }
+
+def build_digital_vertical(markets, options, **kwargs):
+    """
+    Enumerate expiries per PM market, then evaluate the digital vertical on each allowed expiry set.
+    Backward compatible: if config missing, defaults apply.
+    """
+    cfg = kwargs.get("cfg") or load_config()
+    hedging = getattr(cfg, "hedging", None)
+    varcfg = getattr(hedging, "variance", None)
+    policy_cfg = dict(
+        expiry_policy=getattr(varcfg, "expiry_policy", "allow_far_with_unwind"),
+        max_expiry_gap_days=getattr(varcfg, "max_expiry_gap_days", 60),
+        max_expiries_considered=getattr(varcfg, "max_expiries_considered", 10),
+        min_quotes_per_expiry=getattr(varcfg, "min_quotes_per_expiry", 2),
+        min_strikes_required=getattr(varcfg, "min_strikes_required", 6),
+    )
+    results = []
+    for m in markets:
+        pm_date_field = "polymarket_date"
+        pm_d: date = m[pm_date_field] if isinstance(m, dict) else getattr(m, pm_date_field)
+        pm_ts = pm_date_to_default_cutoff_utc(pm_d)
+        cands = enumerate_expiries(pm_ts, options, policy_cfg=policy_cfg)
+        opt_filtered = _filter_chain_by_expiry_candidates(options, cands)
+        # >>> existing digital construction over opt_filtered (unchanged) <<<
+        res = _run_single_digital(m, opt_filtered, cfg=cfg)  # assume your helper exists
+        results.append({"pm_date": pm_d.isoformat(), "selected_expiries": [c.date.isoformat() for c in cands], "result": res})
+    return results

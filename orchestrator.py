@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Protocol, Mapping, Iterable, Any, Dict, Optional, List
+import strategies.options.expiry_layer  # auto-wires multi-expiry for all options strategies
 import logging
 from utils.debug_recorder import get_recorder  # type: ignore
 from utils.log_gate import per_currency_snapshot_enabled  # type: ignore
