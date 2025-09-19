@@ -230,6 +230,13 @@ class OptionsChainCollector:
                 option_type_code = option_details.get('option_type', '')
                 option_type_full = "put" if option_type_code == "P" else "call"
                 
+                # Calculate days to expiry
+                days_to_expiry = 0.0
+                if expiry_timestamp > 0:
+                    expiry_dt = datetime.fromtimestamp(expiry_timestamp, tz=timezone.utc)
+                    now = datetime.now(timezone.utc)
+                    days_to_expiry = max(0.0, (expiry_dt - now).total_seconds() / 86400.0)
+                
                 # Create enhanced option with standardized fields for strategy generator
                 enhanced_opt = opt.copy()
                 strike_value = float(option_details.get('strike', 0))
@@ -238,7 +245,8 @@ class OptionsChainCollector:
                     'strike_price': strike_value,
                     'strike': strike_value,  # Add both for compatibility
                     'option_type': option_type_full,  # 'call' or 'put'
-                    'type': option_type_full  # Add 'type' field that strategies expect
+                    'type': option_type_full,  # Add 'type' field that strategies expect
+                    'days_to_expiry': days_to_expiry  # Add days to expiry for filtering
                 })
                 enhanced_options.append(enhanced_opt)
             

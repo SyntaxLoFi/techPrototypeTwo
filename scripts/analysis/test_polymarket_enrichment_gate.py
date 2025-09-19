@@ -7,7 +7,7 @@ if BASE not in sys.path:
 
 from typing import Dict, Any, List
 from scripts.data_collection.polymarket_fetcher_v2 import PolymarketFetcher
-from hedging.options import OptionHedgeBuilder
+from hedging.opportunity_builder import HedgeOpportunityBuilder
 
 class _DummyClient:
     def get_books(self, token_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -47,7 +47,7 @@ def test_liquidity_gate_uses_bid_or_ask():
             'options_collector': None, 'perps_collector': None
         }
     }
-    hb = OptionHedgeBuilder(scanners=scanners)
+    hb = HedgeOpportunityBuilder(scanners=scanners)
     assert hb._pm_has_liquidity(scanners['BTC']['contracts'][0]) is True
 
 if __name__ == '__main__':

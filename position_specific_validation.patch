@@ -1,0 +1,146 @@
+--- a/strategies/options/variance_swap_strategy.py
++++ b/strategies/options/variance_swap_strategy.py
+@@ -500,13 +500,24 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
+                 f.write(f"  - Options available: {len(hedge_instruments.get('options', []))}\n")
+         except Exception:
+             pass
+-            
+-        if not self.validate_inputs(polymarket_contract, current_spot):
++        
++        # Perform basic validation (required fields, spot price, etc)
++        if not self._validate_basic_inputs(polymarket_contract, current_spot):
+             try:
+                 with open(debug_log_path, "a") as f:
+-                    f.write(f"  - VALIDATION FAILED\n")
++                    f.write(f"  - BASIC VALIDATION FAILED\n")
+             except Exception:
+                 pass
+             return []
+         
+         options_data = [self._normalize_option_record(o) for o in (hedge_instruments.get('options') or [])]
+@@ -590,6 +601,30 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
+         for expiry_date, expiry_options in options_by_expiry.items():
+             self.logger.debug(f"[variance] expiry={expiry_date}: raw options={len(expiry_options)}, unique strikes={len(set(o['strike'] for o in expiry_options))}")
+             # Let the portfolio builder enforce grid adequacy; don't pre-filter here
+             
+             # Evaluate YES position with variance hedge
+-            yes_opportunity = self._evaluate_variance_hedge(
+-                'YES', yes_price, pm_strike,
+-                expiry_date, expiry_options, current_spot,
+-                position_size, polymarket_contract, vol_sensitivity
+-            )
+-            if yes_opportunity:
+-                opportunities.append(yes_opportunity)
++            if self._validate_position_price('YES', yes_price):
++                yes_opportunity = self._evaluate_variance_hedge(
++                    'YES', yes_price, pm_strike,
++                    expiry_date, expiry_options, current_spot,
++                    position_size, polymarket_contract, vol_sensitivity
++                )
++                if yes_opportunity:
++                    opportunities.append(yes_opportunity)
++            else:
++                self.logger.debug(f"[variance] Skipping YES position due to price validation (yes_price={yes_price})")
+             
+             # Evaluate NO position with variance hedge
+-            no_opportunity = self._evaluate_variance_hedge(
+-                'NO', no_price, pm_strike,
+-                expiry_date, expiry_options, current_spot,
+-                position_size, polymarket_contract, vol_sensitivity
+-            )
+-            if no_opportunity:
+-                opportunities.append(no_opportunity)
++            if self._validate_position_price('NO', no_price):
++                no_opportunity = self._evaluate_variance_hedge(
++                    'NO', no_price, pm_strike,
++                    expiry_date, expiry_options, current_spot,
++                    position_size, polymarket_contract, vol_sensitivity
++                )
++                if no_opportunity:
++                    opportunities.append(no_opportunity)
++            else:
++                self.logger.debug(f"[variance] Skipping NO position due to price validation (no_price={no_price})")
+         
+         return opportunities
++    
++    def _validate_basic_inputs(self, polymarket_contract: Dict, current_spot: float) -> bool:
++        """
++        Validate basic required inputs without price thresholds.
++        This checks for required fields and valid spot price only.
++        """
++        # Check required fields
++        for field in self.REQUIRED_FIELDS:
++            if field not in polymarket_contract:
++                self.logger.debug(f"Missing required field: {field}")
++                _audit_emit({
++                    "run_id": os.getenv("APP_RUN_ID", "unknown"),
++                    "stage": "validate_basic_inputs",
++                    "validation_pass": False,
++                    "reason_code": f"MISSING_{field.upper()}",
++                    "fields_seen": list(polymarket_contract.keys()),
++                    "pm_market_id": polymarket_contract.get("id") or polymarket_contract.get("question_id") or polymarket_contract.get("slug"),
++                    "pm_question": polymarket_contract.get("question"),
++                    "pm_currency_field": polymarket_contract.get("currency"),
++                })
++                return False
++        
++        # Check spot price only if it's relevant for the strategy
++        if 'strike_price' in self.REQUIRED_FIELDS and current_spot <= 0:
++            self.logger.debug(f"Invalid spot price: {current_spot}")
++            _audit_emit({
++                "run_id": os.getenv("APP_RUN_ID", "unknown"),
++                "stage": "validate_basic_inputs",
++                "validation_pass": False,
++                "reason_code": "BAD_SPOT",
++                "current_spot": current_spot,
++            })
++            return False
++        
++        return True
++    
++    def _validate_position_price(self, position: str, price: Optional[float]) -> bool:
++        """
++        Validate price for a specific position (YES or NO).
++        
++        For YES positions: reject if YES price is too low or too high
++        For NO positions: reject if NO price is too low or too high
++        
++        This allows taking NO positions when YES is extreme and vice versa.
++        """
++        if price is None:
++            return False
++        
++        price = float(price)
++        if not (0.0 < price < 1.0):
++            return False
++        
++        min_threshold = getattr(self, 'min_price_threshold', 0.01)  # 1% minimum
++        max_threshold = getattr(self, 'max_price_threshold', 0.99)  # 99% maximum
++        
++        if price < min_threshold:
++            self.logger.debug(f"{position} price too low for liquidity: {price:.3f} < {min_threshold}")
++            _audit_emit({
++                "run_id": os.getenv("APP_RUN_ID", "unknown"),
++                "stage": "validate_position_price",
++                "validation_pass": False,
++                "reason_code": f"{position}_TOO_LOW",
++                "position": position,
++                f"{position.lower()}_price": price,
++                "min_price_threshold": min_threshold,
++            })
++            return False
++        
++        if price > max_threshold:
++            self.logger.debug(f"{position} price too high for liquidity: {price:.3f} > {max_threshold}")
++            _audit_emit({
++                "run_id": os.getenv("APP_RUN_ID", "unknown"),
++                "stage": "validate_position_price",
++                "validation_pass": False,
++                "reason_code": f"{position}_TOO_HIGH",
++                "position": position,
++                f"{position.lower()}_price": price,
++                "max_price_threshold": max_threshold,
++            })
++            return False
++        
++        return True

@@ -431,7 +431,7 @@ async def main(*args, **kwargs) -> None:
     try:
         from orchestrator import Orchestrator  # type: ignore
         from data_refresh import DataRefresh  # type: ignore
-        from hedging.options import OptionHedgeBuilder  # type: ignore
+        from hedging.opportunity_builder import HedgeOpportunityBuilder  # type: ignore
         from persistence.writer import DefaultWriter  # type: ignore
 
         # Stable run id added to all logs + debug dumps
@@ -465,7 +465,7 @@ async def main(*args, **kwargs) -> None:
             pass
         scanners = build_scanners(logger=logging.getLogger("ScannerInit"), recorder=rec)
         refresher = DataRefresh(scanners=scanners, logger=logging.getLogger("DataRefresh"))
-        hedge = OptionHedgeBuilder(scanners=scanners, logger=logging.getLogger("OptionHedgeBuilder"))
+        hedge = HedgeOpportunityBuilder(scanners=scanners, logger=logging.getLogger("HedgeOpportunityBuilder"))
         writer = DefaultWriter(logger=logging.getLogger("Writer"))
 
         orch = Orchestrator(refresher=refresher, hedge=hedge, writer=writer,
@@ -478,7 +478,7 @@ async def main(*args, **kwargs) -> None:
         debugger.save_summary()
 
     except ImportError as e:
-        log.error("Refactored modules not found (%s). Add:\n  orchestrator.py\n  data_refresh.py\n  hedging/options.py\n  persistence/writer.py", e)
+        log.error("Refactored modules not found (%s). Add:\n  orchestrator.py\n  data_refresh.py\n  hedging/opportunity_builder.py\n  persistence/writer.py", e)
         raise
     except Exception as e:
         log.exception("Fatal error during scan: %s", e)

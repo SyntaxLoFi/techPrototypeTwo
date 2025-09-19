@@ -293,17 +293,20 @@ class BaseOptionsStrategy(BaseStrategy):
         d1 = d2 + s
         return float(K * norm.cdf(-d2) - np.exp(m + 0.5 * v) * norm.cdf(-d1))
     
-    def filter_options_by_expiry(
+    def filter_options_by_date(
         self, 
         options_data: List[Dict], 
         min_days_to_expiry: int = 0
     ) -> List[Dict]:
         """
-        Filter options that expire at least min_days after today.
+        Simple filter for options that expire at least min_days after today.
+        
+        This is a basic date filter. For sophisticated PM-aware filtering,
+        use filter_options_by_expiry instead.
         
         Args:
             options_data: List of options data
-            min_days_to_expiry: Minimum days to expiry required
+            min_days_to_expiry: Minimum days to expiry required from today
             
         Returns:
             Filtered list of options
@@ -332,6 +335,204 @@ class BaseOptionsStrategy(BaseStrategy):
         except Exception:
             pass
         return filtered
+    
+    def filter_options_by_expiry(
+        self, 
+        options: List[Dict], 
+        pm_days_to_expiry: float,
+        *, 
+        inclusive: bool = True
+    ) -> List[Dict]:
+        """
+        Filter options based on Polymarket expiry date with sophisticated validation.
+        
+        This method filters options to include only those from valid expiries
+        that occur on or after the Polymarket resolution date.
+        
+        Args:
+            options: List of option data dicts
+            pm_days_to_expiry: Days until Polymarket resolution
+            inclusive: If True, include options expiring on PM date
+            
+        Returns:
+            List of filtered options suitable for hedging the PM position
+            
+        Valid expiry requirements:
+        - Not synthetic/flagged for skip
+        - Has valid quotes (bid > 0, ask > 0) if required
+        - Expiry has minimum number of valid quotes
+        - Expiry is within acceptable time window of PM date
+        """
+        if not options:
+            return []
+            
+        pm_dte = float(pm_days_to_expiry or 0.0)
+        
+        # Initialize detailed logging
+        debug_stats = {
+            'total_options': len(options),
+            'missing_expiry': 0,
+            'synthetic_or_flagged': 0,
+            'failed_quote_validation': 0,
+            'expired_before_pm': 0,
+            'missing_dte': 0,
+            'expiry_groups': {},
+            'rejected_expiries': {},
+            'accepted_expiries': {}
+        }
+        
+        # Get config parameters with defaults
+        min_quotes_per_expiry = getattr(self, 'min_quotes_per_expiry', 5)
+        require_live_quotes = getattr(self, 'require_live_quotes', True)
+        max_expiries_considered = getattr(self, 'max_expiries_considered', 1)
+        expiry_policy = getattr(self, 'expiry_policy', 'closest_only')
+        max_expiry_gap_days = getattr(self, 'max_expiry_gap_days', 30.0)
+        
+        # Determine if far expiries are allowed
+        allow_far = (expiry_policy == 'allow_far_with_unwind')
+        
+        # Group options by expiry
+        by_expiry = {}
+        for idx, opt in enumerate(options):
+            # Accept multiple expiry field names
+            expiry = opt.get('expiry_date') or opt.get('expiry') or opt.get('expiration')
+            if not expiry:
+                debug_stats['missing_expiry'] += 1
+                continue
+                
+            # Skip synthetic or flagged options
+            if opt.get('is_synthetic') or opt.get('skip_for_execution'):
+                debug_stats['synthetic_or_flagged'] += 1
+                continue
+                
+            # Validate quotes if required
+            if require_live_quotes:
+                bid = float(opt.get('bid', 0.0) or 0.0)
+                ask = float(opt.get('ask', 0.0) or 0.0)
+                has_live = opt.get('has_live_quotes', True)  # Default True if not specified
+                
+                if not ((bid > 0 or ask > 0) and has_live):
+                    debug_stats['failed_quote_validation'] += 1
+                    # Log specific quote failure details
+                    if idx < 5:  # Log first 5 failures for debugging
+                        self.logger.debug(
+                            f"[expiry_filter] Quote validation failed for option {idx}: "
+                            f"bid={bid}, ask={ask}, has_live={has_live}, "
+                            f"strike={opt.get('strike')}, type={opt.get('type')}"
+                        )
+                    continue
+            
+            # Get days to expiry for this option
+            opt_dte = opt.get('days_to_expiry')
+            if opt_dte is None:
+                # Calculate days_to_expiry from expiry_date if not present
+                expiry_str = opt.get('expiry_date') or opt.get('expiry') or opt.get('expiration')
+                if expiry_str:
+                    try:
+                        from datetime import datetime, timezone
+                        # Parse the expiry date
+                        expiry_dt = datetime.strptime(expiry_str, '%Y-%m-%d')
+                        expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+                        now = datetime.now(timezone.utc)
+                        opt_dte = max(0.0, (expiry_dt - now).total_seconds() / 86400.0)
+                    except:
+                        debug_stats['missing_dte'] += 1
+                        continue
+                else:
+                    debug_stats['missing_dte'] += 1
+                    continue
+                
+            try:
+                opt_dte = float(opt_dte)
+            except:
+                debug_stats['missing_dte'] += 1
+                continue
+                
+            # Check if option expires on/after PM date
+            if inclusive:
+                if opt_dte < pm_dte - 0.001:  # Small tolerance for float comparison
+                    debug_stats['expired_before_pm'] += 1
+                    if idx < 5:  # Log first 5 for debugging
+                        self.logger.debug(
+                            f"[expiry_filter] Option expires before PM: opt_dte={opt_dte:.2f}, "
+                            f"pm_dte={pm_dte:.2f}, expiry={expiry}, strike={opt.get('strike')}"
+                        )
+                    continue
+            else:
+                if opt_dte <= pm_dte + 0.001:
+                    debug_stats['expired_before_pm'] += 1
+                    continue
+                    
+            # Add to expiry group
+            if expiry not in by_expiry:
+                by_expiry[expiry] = []
+            by_expiry[expiry].append(opt)
+        
+        # Track expiry groups
+        for expiry, opts in by_expiry.items():
+            debug_stats['expiry_groups'][expiry] = len(opts)
+        
+        # Filter expiries by minimum quote count
+        valid_expiries = {}
+        for expiry, opts in by_expiry.items():
+            if len(opts) >= min_quotes_per_expiry:
+                valid_expiries[expiry] = opts
+                debug_stats['accepted_expiries'][expiry] = len(opts)
+            else:
+                debug_stats['rejected_expiries'][expiry] = {
+                    'count': len(opts),
+                    'reason': f'too_few_quotes (< {min_quotes_per_expiry})'
+                }
+        
+        if not valid_expiries:
+            # Log complete debug summary when no valid expiries found
+            self._log_expiry_filter_debug(debug_stats, pm_dte)
+            return []
+            
+        # Sort expiries by proximity to PM date
+        expiry_list = []
+        for expiry, opts in valid_expiries.items():
+            # Use the first option's DTE as representative
+            rep_dte = opts[0].get('days_to_expiry', 0)
+            distance = abs(rep_dte - pm_dte)
+            expiry_list.append((expiry, opts, distance, rep_dte))
+            
+        expiry_list.sort(key=lambda x: x[2])  # Sort by distance
+        
+        # Select expiries based on policy
+        result = []
+        expiries_used = 0
+        
+        for expiry, opts, distance, rep_dte in expiry_list:
+            if expiries_used >= max_expiries_considered:
+                break
+                
+            # Check expiry gap constraint for additional expiries
+            if expiries_used > 0 and not allow_far:
+                break
+                
+            if expiries_used > 0 and allow_far:
+                gap = abs(rep_dte - pm_dte)
+                if gap > max_expiry_gap_days:
+                    break
+            
+            result.extend(opts)
+            expiries_used += 1
+        
+        # Update debug stats with final results
+        debug_stats['final_options_count'] = len(result)
+        debug_stats['expiries_used'] = expiries_used
+        
+        self.logger.debug(
+            f"[filter_expiry] PM_dte={pm_dte:.1f} found {len(by_expiry)} expiries, "
+            f"{len(valid_expiries)} valid, used {expiries_used}, returned {len(result)} options"
+        )
+        
+        # Log debug stats if we filtered out a significant portion
+        if len(result) < len(options) * 0.1:  # Lost >90% of options
+            self._log_expiry_filter_debug(debug_stats, pm_dte)
+        
+        return result
     
     def filter_options_by_quality(
         self,
@@ -1038,3 +1239,56 @@ class BaseOptionsStrategy(BaseStrategy):
     # ---------------------------------------------------------------------
     # END: Centralized exit-valuation & cost-recovery helpers
     # ---------------------------------------------------------------------
+    
+    def _log_expiry_filter_debug(self, debug_stats: Dict, pm_dte: float) -> None:
+        """Log detailed debug information about expiry filtering."""
+        import json
+        import os
+        from datetime import datetime
+        
+        # Create debug directory if needed
+        debug_dir = "debug_runs"
+        os.makedirs(debug_dir, exist_ok=True)
+        
+        # Log to both logger and file
+        self.logger.info(
+            f"[EXPIRY_FILTER_DEBUG] PM_dte={pm_dte:.1f} days, "
+            f"Total options: {debug_stats['total_options']}, "
+            f"Final: {debug_stats.get('final_options_count', 0)}"
+        )
+        
+        # Log rejection reasons
+        self.logger.info(
+            f"[EXPIRY_FILTER_DEBUG] Rejections - "
+            f"Missing expiry: {debug_stats['missing_expiry']}, "
+            f"Synthetic/flagged: {debug_stats['synthetic_or_flagged']}, "
+            f"Failed quotes: {debug_stats['failed_quote_validation']}, "
+            f"Expired before PM: {debug_stats['expired_before_pm']}, "
+            f"Missing DTE: {debug_stats['missing_dte']}"
+        )
+        
+        # Log expiry group details
+        if debug_stats['expiry_groups']:
+            self.logger.info(
+                f"[EXPIRY_FILTER_DEBUG] Found {len(debug_stats['expiry_groups'])} expiry groups"
+            )
+            for expiry, count in sorted(debug_stats['expiry_groups'].items())[:5]:
+                self.logger.info(f"  - {expiry}: {count} options")
+        
+        # Log rejected expiries
+        if debug_stats['rejected_expiries']:
+            self.logger.info(
+                f"[EXPIRY_FILTER_DEBUG] Rejected {len(debug_stats['rejected_expiries'])} expiries:"
+            )
+            for expiry, info in sorted(debug_stats['rejected_expiries'].items())[:5]:
+                self.logger.info(f"  - {expiry}: {info['count']} options, reason: {info['reason']}")
+        
+        # Write detailed stats to file
+        debug_file = os.path.join(debug_dir, "expiry_filter_debug.jsonl")
+        with open(debug_file, "a") as f:
+            debug_entry = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'pm_dte': pm_dte,
+                'stats': debug_stats
+            }
+            f.write(json.dumps(debug_entry) + "\n")

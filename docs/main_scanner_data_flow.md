@@ -202,14 +202,14 @@ Scanners dictionary (as above)
 
 ## 5. Pre-Hedge Build
 **Checkpoint**: `pre_hedge_build`  
-**Function**: Before `OptionHedgeBuilder.build()`
+**Function**: Before `HedgeOpportunityBuilder.build()`
 
 ### Input/Output
 Same as market snapshot (no transformation, just a checkpoint)
 
 ## 6. Post-Hedge Build (Raw Opportunities)
 **Checkpoint**: `post_hedge_build` and `hedge_opportunities_raw`  
-**Function**: `OptionHedgeBuilder.build()`
+**Function**: `HedgeOpportunityBuilder.build()`
 
 ### Input
 Market snapshot with populated spot prices

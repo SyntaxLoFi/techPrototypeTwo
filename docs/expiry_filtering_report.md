@@ -74,7 +74,7 @@ This report documents all the expiry filtering logic implemented in the Predicti
   - Calculates days remaining from expiry_date field
   - Logs filtering summary with sample kept expiries (line 331)
 
-### hedging/options.py
+### hedging/opportunity_builder.py
 - **filter_options_by_expiry()** reference (line 516) - Calls strategy's filter method
 - Computes days_to_expiry for PM contracts (lines 180-189)
 - Passes through to strategy-specific filtering

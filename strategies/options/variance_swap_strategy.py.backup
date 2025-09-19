@@ -30,7 +30,7 @@ from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN
 from utils.instrument_capture import BASE_UNIT
 from utils.validation_audit import emit as _audit_emit
 from pm.contract import PMContract, collect_unique_expiries as pm_collect_unique_expiries
-# Removed import - filter_options_by_expiry now inherited from BaseOptionsStrategy
+from filters.option_expiry import filter_options_by_expiry
 
 logger = logging.getLogger("VarianceSwapStrategy")
 
@@ -50,20 +50,6 @@ COST_RECOVERY_TOL = 0.02                  # start at 2%, configurable
 CLEAN_QUOTES = True
 NO_ARB_ENFORCE = True
 DIGITAL_WIDTH_BPS = float(os.getenv("DIGITAL_WIDTH_BPS", "0"))  # used by digital bounds below
-
-# --- small helper for consistent checkpoint logging ---
-def _ckpt_write(msg: str) -> None:
-    try:
-        with open("debug_runs/variance_swap_checkpoints.log", "a") as _f:
-            _f.write(msg.rstrip() + "\n")
-    except Exception:
-        pass
-
-def _ckpt(label: str, detail: str = "") -> None:
-    if detail:
-        _ckpt_write(f"{label} {detail}")
-    else:
-        _ckpt_write(label)
 
 # --- Base class import with robust fallback for tests/standalone ---
 try:
@@ -89,7 +75,6 @@ except Exception:
                 return True
             def validate_cost_recovery_at_strike(self, *args, **kwargs) -> bool:
                 return True
-            # filter_options_by_expiry would be inherited from real BaseOptionsStrategy
             def filter_options_by_expiry(self, options: List[Dict], pm_days_to_expiry: float, *, inclusive: bool = True) -> List[Dict]:
                 """
                 Build a list of instruments from up to N **valid** expiries on/after PM.
@@ -150,17 +135,16 @@ except Exception:
                             continue
                     group = by_expiry[exp]
                     # Skip synthetic / flagged expiries
-                    if any((g.get('skip_for_execution') is True) for g in group):
+                    if any((g.get('has_live_prices') is False) or (g.get('skip_for_execution') is True) for g in group):
                         continue
-                    # Require min # of instruments with at least one live side
-                    live_one_side = 0
+                    # Require min # of two-sided quotes
+                    live2 = 0
                     for g in group:
                         bid = float(g.get('bid') or 0.0)
                         ask = float(g.get('ask') or 0.0)
-                        # treat as tradable if either side is quoted > 0
-                        if (bid > 0.0) or (ask > 0.0):
-                            live_one_side += 1
-                    if live_one_side < int(getattr(self, 'min_quotes_per_expiry', 4)):
+                        if (bid > 0.0) and (ask > 0.0):
+                            live2 += 1
+                    if live2 < int(getattr(self, 'min_quotes_per_expiry', 4)):
                         continue
                     out.extend(group)
                     chosen.append(exp)
@@ -259,35 +243,24 @@ def _deprecated(name: str, details: str = "") -> None:
         warnings.warn(f"{name} is deprecated and unused. {details}".strip(), DeprecationWarning, stacklevel=2)
         _warned.add(name)
 
-# --- Deterministic rounding helper (Decimal), but resilient to bad inputs ---
-def round_notional(value: float | Decimal,
-                   step: float | Decimal = 0.01,
-                   mode: str = "half_away_from_zero") -> float:
+# --- Deterministic rounding helper to avoid float drift ---
+def round_notional(value: float | Decimal, step: float | Decimal = 0.01, mode: str = "half_away_from_zero") -> float:
     """
-    Round value to the nearest multiple of step using Decimal, **safely**.
-    If the input or step is non‑finite or invalid, return 0.0 (drop the leg).
+    Round value to the nearest multiple of step using Decimal.
+    Parameters
+    ----------
+    value : float | Decimal
+    step : float | Decimal
+        Quantization step (e.g., 0.01 contracts).
+    mode : {"half_away_from_zero", "half_even"}
     """
-    try:
-        v = Decimal(str(value))
-        s = Decimal(str(step))
-    except Exception:
-        return 0.0
-    # Guard: non‑finite or non‑positive step
-    if (not v.is_finite()) or (not s.is_finite()) or s <= 0:
-        return 0.0
+    v = Decimal(str(value))
+    s = Decimal(str(step))
+    if s <= 0:
+        return float(v)
     rounding = ROUND_HALF_UP if mode != "half_even" else ROUND_HALF_EVEN
-    u = v / s
-    if not u.is_finite():
-        return 0.0
-    try:
-        q = u.quantize(Decimal("1"), rounding=rounding)
-    except Exception:
-        return 0.0
-    out = q * s
-    try:
-        return float(out)
-    except Exception:
-        return 0.0
+    q = (v / s).quantize(Decimal("1"), rounding=rounding)
+    return float(q * s)
 
 
 class VarianceSwapStrategy(BaseOptionsStrategy):
@@ -296,11 +269,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
     CATEGORY = "options"
     """
     Implements variance swap hedging for volatility-sensitive predictions.
-    
-    Configuration Tips:
-    - To allow more extreme markets, adjust min_price_threshold and max_price_threshold
-    - Example: Set min_price_threshold=0.005 (0.5%) and max_price_threshold=0.995 (99.5%)
-    - This will evaluate markets with YES prices between 0.5% and 99.5%
     
     Key features:
     - Replicates variance swaps using options weighted by 1/K²
@@ -320,10 +288,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
     COST_RECOVERY_TOL = 0.02                  # start at 2%, configurable
     CLEAN_QUOTES = True
     NO_ARB_ENFORCE = True
-    
-    # --- PM Price validation thresholds (configurable) ---
-    min_price_threshold: float = 0.01  # Minimum PM price (1% default) - decrease to allow more extreme markets
-    max_price_threshold: float = 0.99  # Maximum PM price (99% default) - increase to allow more extreme markets
 
     
     def _normalize_option_record(self, opt: dict) -> dict:
@@ -446,7 +410,7 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         self.require_live_quotes = bool(getattr(s, "require_live_quotes_for_trades", VARIANCE_REQUIRE_LIVE_QUOTES_FOR_TRADES))
         # Strike preselection window for sparse: fraction around K0 (e.g., 0.2 => [0.8K0, 1.2K0])
         self.strike_proximity_window = float(getattr(s, "strike_proximity_window", VARIANCE_STRIKE_PROXIMITY_WINDOW))
-        # Minimum instruments with a tradable side (bid>0 or ask>0) required to admit an expiry
+        # Minimum instruments with *two-sided* quotes required to admit an expiry
         self.min_quotes_per_expiry = int(getattr(s, "min_quotes_per_expiry", VARIANCE_MIN_QUOTES_PER_EXPIRY))
         # allow tests/callers to flip unwind gating without re-importing config
         self.options_unwind_model = str(OPTIONS_UNWIND_MODEL).lower()
@@ -600,8 +564,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         # Debug logging
         import datetime
         debug_log_path = "debug_runs/variance_swap_debug.log"
-        checkpoint_log_path = "debug_runs/variance_swap_checkpoints.log"
-        
         try:
             with open(debug_log_path, "a") as f:
                 f.write(f"\n[{datetime.datetime.now().isoformat()}] evaluate_opportunities CALLED\n")
@@ -611,25 +573,11 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                 f.write(f"  - Options available: {len(hedge_instruments.get('options', []))}\n")
         except Exception:
             pass
-        
-        # Checkpoint logging initialization
-        try:
-            with open(checkpoint_log_path, "a") as f:
-                f.write(f"\n{'='*80}\n")
-                f.write(f"[{datetime.datetime.now().isoformat()}] Market: {polymarket_contract.get('question', 'N/A')}\n")
-                f.write(f"Starting with 1 opportunity\n")
-        except Exception:
-            pass
             
         if not self._validate_basic_inputs(polymarket_contract, current_spot):
             try:
                 with open(debug_log_path, "a") as f:
                     f.write(f"  - BASIC VALIDATION FAILED\n")
-            except Exception:
-                pass
-            try:
-                with open(checkpoint_log_path, "a") as f:
-                    f.write("Checkpoint 0B: Basic validation failed - DROPPED\n")
             except Exception:
                 pass
             return []
@@ -680,11 +628,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                 self.logger.debug("[variance] filled missing NO price from best ask: %.6f", no_price)
             else:
                 self.logger.info("[variance] skip: NO price unavailable and NO book empty")
-                try:
-                    with open(checkpoint_log_path, "a") as f:
-                        f.write("Checkpoint 0A: Missing NO price and empty NO book - DROPPED\n")
-                except Exception:
-                    pass
                 return []
         # carry PM context for audit breadcrumb
         try:
@@ -695,53 +638,22 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         days_to_expiry = polymarket_contract.get('days_to_expiry')
         
         # Filter options that expire after PM
-        market_question = polymarket_contract.get('question', 'Unknown market')
-        self.logger.debug(f"[variance] Market: {market_question[:80]}...")
-        self.logger.debug(f"[variance] Before filter: {len(options_data)} options, PM days_to_expiry={days_to_expiry}")
         suitable_options = self.filter_options_by_expiry(options_data, days_to_expiry)
-        self.logger.debug(f"[variance] After filter: {len(suitable_options)} suitable options")
-        
-        try:
-            with open(checkpoint_log_path, "a") as f:
-                f.write(f"Checkpoint 2: Expiry selection filter - Options: {len(options_data)} -> {len(suitable_options)}\n")
-                f.write(f"  Market: {market_question[:80]}...\n")
-                f.write(f"  PM days_to_expiry: {days_to_expiry}\n")
-        except Exception:
-            pass
         
         if not suitable_options:
             self.logger.debug("No options with suitable expiry found")
-            try:
-                with open(checkpoint_log_path, "a") as f:
-                    f.write("  Result: No suitable options after expiry filter - DROPPED\n")
-            except Exception:
-                pass
             return []
         
         # Group by expiry
         options_by_expiry = self._group_by_expiry(suitable_options)
         
         # Evaluate strategies for each expiry
-        yes_price_valid = self._validate_position_price('YES', yes_price)
-        no_price_valid = self._validate_position_price('NO', no_price)
-        
-        try:
-            with open(checkpoint_log_path, "a") as f:
-                f.write(f"Checkpoint 1: PM price-range gate - YES price: {yes_price} ({'valid' if yes_price_valid else 'invalid'}), NO price: {no_price} ({'valid' if no_price_valid else 'invalid'})\n")
-                if not yes_price_valid and not no_price_valid:
-                    f.write("  Result: Both YES and NO positions invalid - DROPPED\n")
-        except Exception:
-            pass
-            
-        if not yes_price_valid and not no_price_valid:
-            return []
-        
         for expiry_date, expiry_options in options_by_expiry.items():
             self.logger.debug(f"[variance] expiry={expiry_date}: raw options={len(expiry_options)}, unique strikes={len(set(o['strike'] for o in expiry_options))}")
             # Let the portfolio builder enforce grid adequacy; don't pre-filter here
             
             # Evaluate YES position only if YES price passes validation
-            if yes_price_valid:
+            if self._validate_position_price('YES', yes_price):
                 yes_opportunity = self._evaluate_variance_hedge(
                     'YES', yes_price, pm_strike,
                     expiry_date, expiry_options, current_spot,
@@ -753,7 +665,7 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                 self.logger.debug(f"[variance] Skipping YES position: price {yes_price} outside valid range")
             
             # Evaluate NO position only if NO price passes validation
-            if no_price_valid:
+            if self._validate_position_price('NO', no_price):
                 no_opportunity = self._evaluate_variance_hedge(
                     'NO', no_price, pm_strike,
                     expiry_date, expiry_options, current_spot,
@@ -763,24 +675,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                     opportunities.append(no_opportunity)
             else:
                 self.logger.debug(f"[variance] Skipping NO position: price {no_price} outside valid range")
-        
-        # Final checkpoint summary with detailed tracking
-        try:
-            with open(checkpoint_log_path, "a") as f:
-                f.write(f"\n=== FINAL SUMMARY for {polymarket_contract.get('question', 'N/A')} ===\n")
-                f.write(f"Opportunities created: {len(opportunities)}\n")
-                if opportunities:
-                    for i, opp in enumerate(opportunities):
-                        f.write(f"  Opportunity {i+1}:\n")
-                        f.write(f"    - PM Side: {opp.get('pm_side', 'N/A')}\n")
-                        f.write(f"    - Expiry: {opp.get('option_expiry', 'N/A')}\n")
-                        f.write(f"    - Expected Profit: ${opp.get('expected_pm_hedge_combined', {}).get('expected_profit', 0):.2f}\n")
-                        f.write(f"    - Max Profit: ${opp.get('expected_pm_hedge_combined', {}).get('max_profit', 0):.2f}\n")
-                        f.write(f"    - Hedge Cost: ${opp.get('expected_pm_hedge_combined', {}).get('hedge_cost', 0):.2f}\n")
-                f.write(f"Total opportunities returning to HedgeOpportunityBuilder: {len(opportunities)}\n")
-                f.write("=" * 70 + "\n\n")
-        except Exception:
-            pass
         
         return opportunities
     
@@ -816,18 +710,9 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
             seconds_to_option_expiry = max(0.0, (expiry_dt_utc - now_utc).total_seconds())
             days_to_option_expiry = seconds_to_option_expiry / (24 * 3600)
             
-            # 3) Too-close expiry gate (always log outcome)
-            if seconds_to_option_expiry <= 0 or days_to_option_expiry < 0.1:
-                _ckpt(
-                    "Checkpoint 3:",
-                    f"Too close expiry gate - {expiry_date} has {days_to_option_expiry:.2f} days (<0.1) - DROPPED for {pm_side}"
-                )
+            # Skip expired or too-close expiries (e.g., < 0.5 trading days)
+            if seconds_to_option_expiry <= 0 or days_to_option_expiry < 0.5:
                 return None
-            else:
-                _ckpt(
-                    "Checkpoint 3:",
-                    f"Too close expiry gate - {expiry_date} has {days_to_option_expiry:.2f} days - PASSED for {pm_side}"
-                )
                 
             time_to_expiry = max(seconds_to_option_expiry / SECONDS_PER_YEAR, 1e-8)
             
@@ -838,14 +723,7 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
             
             if not var_swap_portfolio:
                 self.logger.debug(f"[variance] expiry={expiry_date}: portfolio build failed (None)")
-                _ckpt("Checkpoint 4:", f"Portfolio build gates - Failed to build portfolio for {pm_side} - DROPPED")
                 return None
-            else:
-                # lightweight positive breadcrumb
-                try:
-                    _ckpt("Checkpoint 4:", f"Portfolio build gates - BUILT for {pm_side} (puts={len(var_swap_portfolio.get('puts',[]))}, calls={len(var_swap_portfolio.get('calls',[]))})")
-                except Exception:
-                    pass
             self.logger.debug(f"[variance] expiry={expiry_date}: portfolio built with puts={len(var_swap_portfolio.get('puts',[]))}, calls={len(var_swap_portfolio.get('calls',[]))}")
             
             # Calculate variance swap parameters
@@ -929,12 +807,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
             max_gap = getattr(self, "max_forward_pm_gap", 0.05)  # 5% default
             if (var_swap_portfolio.get('anchor_mode', 'forward') == 'forward') and (pm_gap is not None) and (pm_gap > max_gap):
                 self.logger.info(f"[variance] skip: forward/PM gap {pm_gap:.2%} exceeds {max_gap:.2%}")
-                checkpoint_log_path = "debug_runs/variance_swap_checkpoints.log"
-                try:
-                    with open(checkpoint_log_path, "a") as f:
-                        f.write(f"Checkpoint 4A: Forward/PM gap check - gap {pm_gap:.2%} exceeds {max_gap:.2%} for {pm_side} - DROPPED\n")
-                except Exception:
-                    pass
                 return None
             
             # Calculate PM payoffs
@@ -1033,10 +905,8 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                     recovered_raw, needed_raw, int(direction),
                     recovered_dir, needed_dir, 100.0*float(self.COST_RECOVERY_TOL),
                 )
-                _ckpt("Checkpoint 5:", f"Cost recovery gate - FAILED at K_PM={pm_strike} (recovers {recovered_raw:+.2f} vs needed {needed_raw:+.2f}) for {pm_side} - DROPPED")
                 return None
             else:
-                _ckpt("Checkpoint 5:", f"Cost recovery gate - PASSED at K_PM={pm_strike} (recovers {recovered_raw:+.2f} vs needed {needed_raw:+.2f}) for {pm_side}")
                 self.logger.info(
                     "[variance] accept: cost recovery OK at PM strike %s: recovers %+.2f vs needed %+.2f "
                     "(dir=%+d, aligned: %.2f vs %.2f, tol=%.2f%%)",
@@ -1045,7 +915,7 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                     recovered_dir, needed_dir, 100.0*float(self.COST_RECOVERY_TOL),
                 )
 
-            # 6) PM digital-bounds gate at the PM strike (K_PM), with tradable bounds & slack (always log outcome)
+            # 5) PM digital-bounds gate at the PM strike (K_PM), with tradable bounds & slack
             pm_digital_bounds = None  # annotations for UI/debug; set below when available
             if self.use_pm_digital_bounds:
                 K_pm = self._infer_pm_strike(polymarket_contract, var_swap_portfolio)
@@ -1073,18 +943,12 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                         # SOFT mode: annotate; HARD mode: prune
                         if self.enforce_pm_digital_bounds and inside:
                             self.logger.info(f"[variance] prune: PM YES within digital no-arb band at K_PM={K_pm:.4f} (pm={pm_yes:.4f}, band=[{lo:.4f},{hi:.4f}], slack={slack:.4f})")
-                            _ckpt("Checkpoint 6:", f"Digital bounds gate - PM YES {pm_yes:.4f} inside [{lo:.4f},{hi:.4f}] for {pm_side} - DROPPED")
                             return None
-                        else:
-                            state = "PASSED(outside)" if not inside else "PASSED(not enforced)"
-                            _ckpt("Checkpoint 6:", f"Digital bounds gate - {state} for {pm_side} (pm={pm_yes:.4f}, band=[{lo:.4f},{hi:.4f}], slack={slack:.4f})")
                     else:
                         self.logger.debug("[variance] skip digital gate (insufficient bounds or PM price)")
-                        _ckpt("Checkpoint 6:", f"Digital bounds gate - SKIPPED (insufficient bounds or PM price) for {pm_side}")
                         pm_digital_bounds = bounds  # record whatever we computed (may be None)
                 else:
                     self.logger.debug("[variance] skip digital gate (no PM strike)")
-                    _ckpt("Checkpoint 6:", f"Digital bounds gate - SKIPPED (no PM strike) for {pm_side}")
                     pm_digital_bounds = None
 
             # 6) Build opportunity
@@ -1246,24 +1110,9 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                 self.logger.info("variance", extra={"diag": diag})
             except Exception:
                 pass
-            
-            # Checkpoint: Opportunity successfully created
-            checkpoint_log_path = "debug_runs/variance_swap_checkpoints.log"
-            try:
-                with open(checkpoint_log_path, "a") as f:
-                    f.write(f"Checkpoint 7: Opportunity successfully created for {pm_side} position\n")
-                    f.write(f"  - PM Strike: {pm_strike}\n")
-                    f.write(f"  - Expiry: {expiry_date}\n")
-                    f.write(f"  - Sparse legs: {len(sparse_legs) if sparse_legs else 0}\n")
-                    f.write(f"  - Expected profit: {expected_profit:.2f}\n")
-            except Exception:
-                pass
-                
             return opportunity
             
         except Exception as e:
-            # make exceptions visible in the checkpoint file as well
-            _ckpt("Checkpoint 4E:", f"Exception in _evaluate_variance_hedge for {pm_side} @ {expiry_date}: {str(e)}")
             self.logger.error(f"Error in variance swap hedge: {str(e)}")
             return None
     
@@ -1293,12 +1142,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         valid = self.normalize_options(options)
 
         if len(valid) < int(self.min_strikes_required):
-            checkpoint_log_path = "debug_runs/variance_swap_checkpoints.log"
-            try:
-                with open(checkpoint_log_path, "a") as f:
-                    f.write(f"  Portfolio build: Insufficient strikes after normalization - {len(valid)} < {self.min_strikes_required}\n")
-            except Exception:
-                pass
             return None
 
         # --- forward via parity (weighted), fallback to S*e^{rT} ---
@@ -1382,12 +1225,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
                     f"[variance] cannot build replication around K0={K0}: "
                     f"need strikes on both sides (suppressed; total={self._var_miss_both_sides_total})"
                 )
-            checkpoint_log_path = "debug_runs/variance_swap_checkpoints.log"
-            try:
-                with open(checkpoint_log_path, "a") as f:
-                    f.write(f"  Portfolio build: No strikes on both sides of K0={K0} - needs {len(strikes_below)} below and {len(strikes_above)} above\n")
-            except Exception:
-                pass
             return None
 
         # helper: detect "zero" according to mode
@@ -1502,12 +1339,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         valid = sorted(dedup.values(), key=lambda x: (float(x['strike']), x['type']))
         self.logger.debug(f"[_build_var_port] deduped valid={len(valid)} (unique strikes={len(set(v['strike'] for v in valid))})")
         if len(valid) < int(self.min_strikes_required):
-            checkpoint_log_path = "debug_runs/variance_swap_checkpoints.log"
-            try:
-                with open(checkpoint_log_path, "a") as f:
-                    f.write(f"  Portfolio build: Insufficient strikes after deduplication - {len(valid)} < {self.min_strikes_required}\n")
-            except Exception:
-                pass
             return None
 
         # Sanity: at most one put and one call exactly at K0
@@ -1845,6 +1676,169 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
     
     # filter_options_by_expiry is now inherited from BaseOptionsStrategy
     
+    def _group_by_expiry(self, options: List[Dict]) -> Dict[str, List[Dict]):
+        """
+        Return a list of instruments drawn from up to N **valid** expiries on/after the PM date.
+        Valid expiry requires:
+          - not synthetic / not flagged skip_for_execution
+          - if require_live_quotes: bid>0 and ask>0 and has_live_prices=True
+          - at least `min_quotes_per_expiry` such instruments for the expiry to count
+          - additional expiries allowed only if:
+              expiry_policy == 'allow_far_with_unwind'
+              and OPTIONS_UNWIND_MODEL != 'intrinsic_only'
+              and (expiry_dte - pm_dte) <= max_expiry_gap_days
+        Steps:
+          1) group options by expiry_date (accept keys: 'expiry_date' | 'expiry' | 'expiration')
+          2) drop expiries strictly before PM (or <= if inclusive=False)
+          3) sort by |expiry_dte - pm_dte|
+          4) scan forward until we have at most `max_expiries_considered` valid expiries
+        """
+        # --- AGGRESSIVE DEBUG: START ---
+        import sys
+        import datetime
+        print(f"\n\n{'='*80}", file=sys.stderr)
+        print(f"VARIANCE SWAP: filter_options_by_expiry CALLED!", file=sys.stderr)
+        print(f"Options count: {len(options) if options else 0}", file=sys.stderr)
+        print(f"PM days to expiry: {pm_days_to_expiry}", file=sys.stderr)
+        print(f"{'='*80}\n", file=sys.stderr)
+        
+        # Write to dedicated debug file
+        debug_log_path = "debug_runs/variance_swap_debug.log"
+        try:
+            with open(debug_log_path, "a") as f:
+                f.write(f"\n[{datetime.datetime.now().isoformat()}] filter_options_by_expiry CALLED\n")
+                f.write(f"  - Options count: {len(options) if options else 0}\n")
+                f.write(f"  - PM days to expiry: {pm_days_to_expiry}\n")
+                f.write(f"  - Inclusive: {inclusive}\n")
+                if options and len(options) > 0:
+                    # Sample first few options
+                    f.write(f"  - Sample options (first 3):\n")
+                    for i, opt in enumerate(options[:3]):
+                        f.write(f"    Option {i}: expiry={opt.get('expiry_date', 'N/A')}, dte={opt.get('days_to_expiry', 'N/A')}\n")
+        except Exception as e:
+            print(f"Failed to write to debug log: {e}", file=sys.stderr)
+        
+        # --- DEBUG: inventory BEFORE selection ---
+        import json, os, math, datetime as _dt
+        _audit_path = os.environ.get("EXPIRY_DEBUG_PATH", "debug_runs/expiry_debug.jsonl")
+        try:
+            os.makedirs(os.path.dirname(_audit_path), exist_ok=True)
+        except Exception:
+            pass
+
+        try:
+            inv = {}
+            for o in (options or []):
+                exp = o.get("expiry_date") or o.get("expiration") or o.get("expiry")
+                dte = o.get("days_to_expiry")
+                key = (str(exp), None if dte is None else float(dte))
+                inv[key] = inv.get(key, 0) + 1
+            row = {
+                "ts": _dt.datetime.utcnow().isoformat() + "Z",
+                "stage": "pre_filter_inventory",
+                "pm_days_to_expiry": float(pm_days_to_expiry or 0.0),
+                "pre_filter_expiries": [
+                    {"expiry": k[0], "rep_days_to_expiry": k[1], "count": c}
+                    for k, c in sorted(inv.items(), key=lambda kv: (kv[0][1] if kv[0][1] is not None else 1e9))
+                ],
+            }
+            with open(_audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+            print(f"DEBUG: Wrote expiry debug to {_audit_path}", file=sys.stderr)
+            
+            # Also note in our debug log
+            with open(debug_log_path, "a") as f:
+                f.write(f"  - Wrote expiry inventory to {_audit_path}\n")
+                f.write(f"  - Found {len(inv)} unique expiries\n")
+        except Exception as e:
+            print(f"DEBUG: Failed to write expiry debug: {e}", file=sys.stderr)
+            with open(debug_log_path, "a") as f:
+                f.write(f"  - ERROR writing expiry debug: {e}\n")
+
+        from math import inf
+        pm_dte = float(pm_days_to_expiry or 0.0)
+        allow_far = (self.expiry_policy == "allow_far_with_unwind" and OPTIONS_UNWIND_MODEL != "intrinsic_only")
+        maxN = int(self.max_expiries_considered or 1)
+        gap = float(self.max_expiry_gap_days or 0.0)
+
+        # Group options by expiry (normalize keys)
+        by_exp = {}
+        for o in options or []:
+            exp = o.get("expiry_date") or o.get("expiry") or o.get("expiration")
+            if not exp:
+                # skip silently; we can log rare keyless entries at debug level if needed
+                continue
+            try:
+                dte = float(o.get("days_to_expiry", inf))
+            except Exception:
+                dte = inf
+            # Keep original record plus normalized fields
+            rec = dict(o)
+            rec["_expiry_norm"] = exp
+            rec["_dte"] = dte
+            by_exp.setdefault(exp, []).append(rec)
+
+        # Build candidate expiries on/after PM date
+        def _is_two_sided(x):
+            bid = float(x.get("bid") or 0.0)
+            ask = float(x.get("ask") or 0.0)
+            if self.require_live_quotes:
+                return (bid > 0.0) and (ask > 0.0) and bool(x.get("has_live_prices", False)) and not bool(x.get("skip_for_execution", False))
+            else:
+                return not bool(x.get("skip_for_execution", False))
+
+        # Prepare a sortable list: (distance, dte, exp_str, instruments[])
+        rows = []
+        for exp, arr in by_exp.items():
+            # select instruments with (optional) live, two-sided quotes
+            twos = [x for x in arr if _is_two_sided(x)]
+            # expiry must be on/after the PM date
+            if inclusive:
+                on_after = [x for x in twos if (x["_dte"] >= pm_dte)]
+            else:
+                on_after = [x for x in twos if (x["_dte"] > pm_dte)]
+            if not on_after:
+                continue
+            # distance from PM date, using the first item's dte (all same expiry)
+            dte_val = min(x["_dte"] for x in on_after)
+            dist = abs(dte_val - pm_dte)
+            rows.append((dist, dte_val, exp, on_after))
+
+        rows.sort(key=lambda r: (r[0], r[1]))
+
+        # Scan forward, honoring far-expiry policy and gap, and min_quotes_per_expiry
+        selected, reasons = [], {"pre_pm": 0, "far_not_allowed": 0, "gap_exceeded": 0, "insufficient_two_sided": 0, "ok": 0}
+        for _, dte_val, exp, on_after in rows:
+            if dte_val < pm_dte or (not inclusive and dte_val <= pm_dte):
+                reasons["pre_pm"] += 1
+                continue
+            if len(on_after) < int(self.min_quotes_per_expiry or 1):
+                reasons["insufficient_two_sided"] += 1
+                continue
+            # first valid expiry is always ok; subsequent ones are gated
+            if selected:
+                if not allow_far:
+                    reasons["far_not_allowed"] += 1
+                    continue
+                if (dte_val - pm_dte) > gap:
+                    reasons["gap_exceeded"] += 1
+                    continue
+            reasons["ok"] += 1
+            selected.append((exp, dte_val, on_after))
+            if len(selected) >= maxN:
+                break
+
+        # Flatten instruments from selected expiries
+        out = []
+        for _, _, arr in selected:
+            out.extend(arr)
+
+        self.logger.info(
+            "[EXPSEL] pm_dte=%.2f allow_far=%s gap=%d maxN=%d → selected=%s reasons=%s",
+            pm_dte, allow_far, int(gap), int(maxN), [exp for exp, _, _ in selected], reasons
+        )
+        return out
+
     def _group_by_expiry(self, options: List[Dict]) -> Dict[str, List[Dict]]:
         """Group options by expiry date."""
         grouped = {}
@@ -2093,26 +2087,15 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         if opt_idx:
             floor_default = float(getattr(self, "min_contracts", 0.01))
             # Use defaults here; the rounder will still apply per-asset overrides.
-            max_abs_w   = max(abs(float(w_trade[i])) for i in opt_idx) if opt_idx else 0.0
+            max_abs_w = max(abs(float(w_trade[i])) for i in opt_idx) if opt_idx else 0.0
             max_abs_val = max(abs(float(w_trade[i]) * float(p_vec[i])) for i in opt_idx) if opt_idx else 0.0
-            need_floor  = (max_abs_w   > 0.0) and (max_abs_w   < floor_default - 1e-12)
-            need_value  = (max_abs_val > 0.0) and (max_abs_val < float(min_notional_local) - 1e-12)
+            need_floor = (max_abs_w > 0.0) and (max_abs_w < floor_default - 1e-12)
+            need_value = (max_abs_val > 0.0) and (max_abs_val < float(min_notional_local) - 1e-12)
             if need_floor or need_value:
-                # Only include scales that are actually needed and have valid denominators.
-                scale_candidates = [1.0]
-                if need_floor and max_abs_w > 0.0:
-                    scale_candidates.append(floor_default / max_abs_w)
-                if need_value and max_abs_val > 0.0:
-                    scale_candidates.append(float(min_notional_local) / max_abs_val)
-                scale_applied = max(scale_candidates) * (1.0 + 1e-6)  # small epsilon to clear thresholds
-                # Clip pathological scales to keep numbers finite and diagnosable.
-                if not np.isfinite(scale_applied) or scale_applied <= 0:
-                    _ckpt("Checkpoint 4D:", f"Bad scale_applied={scale_applied} (w_max={max_abs_w}, val_max={max_abs_val}) - clipping to 1.0")
-                    scale_applied = 1.0
-                elif scale_applied > 1e6:
-                    _ckpt("Checkpoint 4D:", f"Excessive scale_applied={scale_applied:.3g} - clipping to 1e6")
-                    scale_applied = 1e6
-                w_trade   *= scale_applied
+                s_floor = (floor_default / max_abs_w) if max_abs_w > 0.0 else float("inf")
+                s_value = (float(min_notional_local) / max_abs_val) if max_abs_val > 0.0 else float("inf")
+                scale_applied = max(1.0, s_floor, s_value) * (1.0 + 1e-6)  # small epsilon to clear thresholds
+                w_trade *= scale_applied
                 cost_scaled *= scale_applied
                 try:
                     self.logger.debug(
@@ -2170,11 +2153,6 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
             min_notional=float(min_notional_local),
             bond_name=str(self.bond_basis_name),
         )
-        # Ensure no NaN/Inf leak through from rounding
-        if not np.all(np.isfinite(w_round)):
-            bad = int(np.sum(~np.isfinite(w_round)))
-            _ckpt("Checkpoint 4D:", f"Non-finite weights from round_options_and_repair_budget: {bad} - zeroing")
-            w_round = np.where(np.isfinite(w_round), w_round, 0.0)
 
         # Post-round diagnostics; surface common culling reason clearly
         nonzero_legs = [(nm, float(w)) for nm, w in zip(names, w_round)
@@ -2197,19 +2175,15 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
         except Exception:
             w_final = w_round
         w_round = w_final
-        # Final quantization (float, finite-safe). The helper already rounds per asset;
-        # this is a conservative global step, guarded against non-finite values.
+        # Deterministic quantization of option weights using Decimal to avoid float drift
         step = float(getattr(self, "contract_increment", 0.01) or 0.01)
-        if step > 0:
-            w_q = []
-            for nm, w in zip(names, w_round):
-                if nm.startswith("call_") or nm.startswith("put_"):
-                    w_q.append(step * np.round(float(w) / step) if np.isfinite(w) else 0.0)
-                else:
-                    w_q.append(float(w) if np.isfinite(w) else 0.0)
-            w_round = np.array(w_q, float)
-        else:
-            _ckpt("Checkpoint 4D:", "contract_increment<=0; skipping final quantization")
+        w_q = []
+        for nm, w in zip(names, w_round):
+            if nm.startswith("call_") or nm.startswith("put_"):
+                w_q.append(round_notional(float(w), step=step, mode="half_away_from_zero"))
+            else:
+                w_q.append(float(w))
+        w_round = np.array(w_q, float)
 
         # Build legs from rounded/refit weights
         legs = []
@@ -2262,12 +2236,10 @@ class VarianceSwapStrategy(BaseOptionsStrategy):
             for l in legs:
                 bid = float(l.get("bid") or 0.0)
                 ask = float(l.get("ask") or 0.0)
-                # Require only the executable side for each leg: ask for BUY (q>0), bid for SELL (q<0)
-                action = 'BUY' if float(l.get('quantity', 0.0)) > 0.0 else 'SELL'
-                has_required_side = (ask > 0.0) if action == 'BUY' else (bid > 0.0)
-                if (not has_required_side) or (l.get("skip_for_execution") is True):
-                    self.logger.warning("[variance sparse] [REJECT] missing live quotes for %s K=%.4f exp=%s bid=%.4f ask=%.4f", l.get("type"), l.get("strike"), l.get("expiry"), bid, ask)
-                    return [], {"culled_by": "missing_required_side"}
+                # Require two-sided quotes for any leg to be tradable
+                if (not (bid > 0.0 and ask > 0.0)) or (l.get("has_live_quotes") is False) or (l.get("skip_for_execution") is True):
+                    self.logger.warning("[variance sparse] [REJECT] missing live quotes for %s %s@%s bid=%.4f ask=%.4f", l.get("type"), l.get("strike"), l.get("expiry"), bid, ask)
+                    return [], {"culled_by": "missing_live_quotes"}
 
         return legs, diagnostics
     

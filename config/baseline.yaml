@@ -185,7 +185,7 @@ hedging:
     # Clamped to [2, 20].
     min_quotes_per_expiry: 2
     # Minimum number of strikes required post-filter to attempt replication (calls+puts combined).
-    min_strikes_required: 6
+    min_strikes_required: 2
     # objective
     regularization: 1.0e-8
     cost_budget: 0.0
