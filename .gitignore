@@ -215,3 +215,8 @@ yarn.lock
 
 # Delete directory
 Delete/
+
+# Project output directories
+analysis/
+debug_runs/
+results/

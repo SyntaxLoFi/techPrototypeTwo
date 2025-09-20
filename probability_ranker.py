@@ -44,6 +44,13 @@ from black_scholes_greeks import BlackScholesGreeks, calculate_vega_penalty_accu
 from config_loader import get_config
 from config_manager import DEFAULT_IMPLIED_VOLATILITY, RISK_FREE_RATE, DAYS_PER_YEAR
 from market_data_analyzer import MarketDataAnalyzer
+from os import getenv
+
+try:
+    from filters.opportunity_bucketer import tag_opportunities_in_place, bucket_sorted_list
+except Exception:
+    tag_opportunities_in_place = None
+    bucket_sorted_list = None
 
 
 @dataclass
@@ -124,6 +131,11 @@ class ProbabilityRanker:
         self.logger = logging.getLogger("ProbabilityRanker")
         self.pm_fee = polymarket_fee
         self.risk_free_rate = risk_free_rate
+        self.primary_sort_mode = getenv('PRIMARY_SORT_MODE', 'legacy').lower()  # 'legacy' | 'bucket'
+        # Optional per-bucket sort key overrides, e.g. "TRUE_ARBITRAGE:guaranteed_profit;NEAR_ARB_SUPERHEDGED:profit_after_superhedge"
+        self.bucket_sort_keys = dict(
+            s.split(':', 1) for s in getenv('BUCKET_SORT_KEYS', '').split(';') if ':' in s
+        )
 
         if use_config:
             cfg = get_config().ranking
@@ -336,10 +348,19 @@ class ProbabilityRanker:
         # Step 2: Remove dominated strategies
         non_dominated = self._remove_dominated_strategies(enriched_opportunities)
         
-        # Step 3: Lexicographic sorting
+        # Step 3: Lexicographic sorting (legacy)
         sorted_opps = self._lexicographic_sort(non_dominated)
-        
-        # Step 4: Add final rankings
+
+        # NEW: tag & optional bucket-first sorting
+        if tag_opportunities_in_place:
+            try:
+                tag_opportunities_in_place(sorted_opps)
+                if self.primary_sort_mode == 'bucket' and bucket_sorted_list:
+                    sorted_opps = bucket_sorted_list(sorted_opps, sort_keys=self.bucket_sort_keys or None)
+            except Exception as e:
+                self.logger.debug(f"bucket tagging/sorting skipped: {e}")
+
+        # Step 4: Add final rankings (post-bucket sort if enabled)
         for i, opp in enumerate(sorted_opps):
             opp['rank'] = i + 1
             opp['quality_tier'] = self._assign_quality_tier(opp)

@@ -55,8 +55,8 @@ execution:
   kelly_fraction_cap: 0.50
 
   # Position sizing (for calc defaults; not a hard capacity limit)
-  default_position_size: 100.0
-  max_position_size: 1000.0
+  default_position_size: 10000.0
+  max_position_size: 10000.0
   min_position_size: 10.0
   
   # Instrument capture for automated trading

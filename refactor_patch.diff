@@ -1,86 +1,48 @@
-diff --git a/variance_swap_strategy.py b/variance_swap_strategy.py
---- a/variance_swap_strategy.py
-+++ b/variance_swap_strategy.py
-@@ -..., +... @@ def _sparse_variance_legs(self, portfolio, var_notional, X, y, p_vec, names, candidate_idx, sigma_for_states):
--        opt_idx = [i for i, nm in enumerate(names) if nm.startswith(("call_", "put_"))]
--        scale_applied = 1.0
--        if opt_idx:
--            floor_default = float(getattr(self, "min_contracts", 0.01))
--            # Use defaults here; the rounder will still apply per-asset overrides.
--            max_abs_w = max(abs(float(w_trade[i])) for i in opt_idx) if opt_idx else 0.0
--            max_abs_val = max(abs(float(w_trade[i]) * float(p_vec[i])) for i in opt_idx) if opt_idx else 0.0
--            need_floor = (max_abs_w > 0.0) and (max_abs_w < floor_default - 1e-12)
--            need_value = (max_abs_val > 0.0) and (max_abs_val < float(min_notional_local) - 1e-12)
--            if need_floor or need_value:
--                s_floor = (floor_default / max_abs_w) if max_abs_w > 0.0 else float("inf")
--                s_value = (float(min_notional_local) / max_abs_val) if max_abs_val > 0.0 else float("inf")
--                scale_applied = max(1.0, s_floor, s_value) * (1.0 + 1e-6)  # small epsilon to clear thresholds
--                w_trade *= scale_applied
--                cost_scaled *= scale_applied
-+        opt_idx = [i for i, nm in enumerate(names) if nm.startswith(("call_", "put_"))]
-+        scale_applied = 1.0
-+        if opt_idx:
-+            floor_default = float(getattr(self, "min_contracts", 0.01))
-+            # Use defaults here; the rounder will still apply per-asset overrides.
-+            max_abs_w   = max(abs(float(w_trade[i])) for i in opt_idx) if opt_idx else 0.0
-+            max_abs_val = max(abs(float(w_trade[i]) * float(p_vec[i])) for i in opt_idx) if opt_idx else 0.0
-+            need_floor  = (max_abs_w   > 0.0) and (max_abs_w   < floor_default - 1e-12)
-+            need_value  = (max_abs_val > 0.0) and (max_abs_val < float(min_notional_local) - 1e-12)
-+            if need_floor or need_value:
-+                # Only include scales that are actually needed and have valid denominators.
-+                scale_candidates = [1.0]
-+                if need_floor and max_abs_w > 0.0:
-+                    scale_candidates.append(floor_default / max_abs_w)
-+                if need_value and max_abs_val > 0.0:
-+                    scale_candidates.append(float(min_notional_local) / max_abs_val)
-+                scale_applied = max(scale_candidates) * (1.0 + 1e-6)  # small epsilon to clear thresholds
-+                # Clip pathological scales to keep numbers finite and diagnosable.
-+                if not np.isfinite(scale_applied) or scale_applied <= 0:
-+                    _ckpt("Checkpoint 4D:", f"Bad scale_applied={scale_applied} (w_max={max_abs_w}, val_max={max_abs_val}) - clipping to 1.0")
-+                    scale_applied = 1.0
-+                elif scale_applied > 1e6:
-+                    _ckpt("Checkpoint 4D:", f"Excessive scale_applied={scale_applied:.3g} - clipping to 1e6")
-+                    scale_applied = 1e6
-+                w_trade   *= scale_applied
-+                cost_scaled *= scale_applied
-@@ -..., +... @@ def _sparse_variance_legs(self, portfolio, var_notional, X, y, p_vec, names, candidate_idx, sigma_for_states):
--        w_round = round_options_and_repair_budget(
-+        w_round = round_options_and_repair_budget(
-             names, w_trade, p_vec,
-             underlyings=getattr(self, "basis_underlyings", None),
-             asset_resolver=getattr(self, "asset_resolver", None),
-             step_by_asset=self.contract_increment_by_asset,
-             floor_by_asset=self.min_contracts_by_asset,
-             default_step=float(self.contract_increment),
-             default_floor=float(self.min_contracts),
-             min_notional=float(min_notional_local),
-             bond_name=str(self.bond_basis_name),
-         )
-+        # Ensure no NaN/Inf leak through from rounding
-+        if not np.all(np.isfinite(w_round)):
-+            bad = int(np.sum(~np.isfinite(w_round)))
-+            _ckpt("Checkpoint 4D:", f"Non-finite weights from round_options_and_repair_budget: {bad} - zeroing")
-+            w_round = np.where(np.isfinite(w_round), w_round, 0.0)
-@@ -..., +... @@ def _sparse_variance_legs(self, portfolio, var_notional, X, y, p_vec, names, candidate_idx, sigma_for_states):
--        # Deterministic quantization of option weights using Decimal to avoid float drift
--        step = float(getattr(self, "contract_increment", 0.01) or 0.01)
--        w_q = []
--        for nm, w in zip(names, w_round):
--            if nm.startswith("call_") or nm.startswith("put_"):
--                w_q.append(round_notional(float(w), step=step, mode="half_away_from_zero"))
--            else:
--                w_q.append(float(w))
--        w_round = np.array(w_q, float)
-+        # Final quantization (float, finite-safe). The helper already rounds per asset;
-+        # this is a conservative global step, guarded against non-finite values.
-+        step = float(getattr(self, "contract_increment", 0.01) or 0.01)
-+        if step > 0:
-+            w_q = []
-+            for nm, w in zip(names, w_round):
-+                if nm.startswith("call_") or nm.startswith("put_"):
-+                    w_q.append(step * np.round(float(w) / step) if np.isfinite(w) else 0.0)
-+                else:
-+                    w_q.append(float(w) if np.isfinite(w) else 0.0)
-+            w_round = np.array(w_q, float)
-+        else:
-+            _ckpt("Checkpoint 4D:", "contract_increment<=0; skipping final quantization")
+diff --git a/probability_ranker.py b/probability_ranker.py
+index 1111111..2222222 100644
+--- a/probability_ranker.py
++++ b/probability_ranker.py
+@@ -1,10 +1,22 @@
+ import os
+ import logging
+ from typing import List, Dict
++from os import getenv
++
++try:
++    from filters.opportunity_bucketer import tag_opportunities_in_place, bucket_sorted_list
++except Exception:
++    tag_opportunities_in_place = None
++    bucket_sorted_list = None
+ 
+ class ProbabilityRanker:
+     def __init__(self, logger: logging.Logger = None):
+         self.logger = logger or logging.getLogger(__name__)
++        self.primary_sort_mode = getenv('PRIMARY_SORT_MODE', 'legacy').lower()  # 'legacy' | 'bucket'
++        # Optional per-bucket sort key overrides, e.g. "TRUE_ARBITRAGE:guaranteed_profit;NEAR_ARB_SUPERHEDGED:profit_after_superhedge"
++        self.bucket_sort_keys = dict(
++            s.split(':', 1) for s in getenv('BUCKET_SORT_KEYS', '').split(';') if ':' in s
++        )
+ 
+     def rank_opportunities(self, opportunities: List[Dict]) -> List[Dict]:
+         \"\"\"Return ranked list with probability metrics; optionally bucket-sort.\"\"\"
+@@
+-        # Step 3: Lexicographic sorting
+-        sorted_opps = self._lexicographic_sort(non_dominated)
++        # Step 3: Lexicographic sorting (legacy)
++        sorted_opps = self._lexicographic_sort(non_dominated)
+ 
+-        # Step 4: Add final rankings
++        # NEW: tag & optional bucket-first sorting
++        if tag_opportunities_in_place:
++            try:
++                tag_opportunities_in_place(sorted_opps)
++                if self.primary_sort_mode == 'bucket' and bucket_sorted_list:
++                    sorted_opps = bucket_sorted_list(sorted_opps, sort_keys=self.bucket_sort_keys or None)
++            except Exception as e:
++                self.logger.debug(f\"bucket tagging/sorting skipped: {e}\")
++
++        # Step 4: Add final rankings (post-bucket sort if enabled)
+         for i, opp in enumerate(sorted_opps):
+             opp['rank'] = i + 1
+             opp['quality_tier'] = self._assign_quality_tier(opp)
+         return sorted_opps
